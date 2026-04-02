@@ -71,7 +71,9 @@ def execute(
             if not filename:
                 filename = f"photo_{i}.jpg"
             
-            output_path = os.path.join(output_dir, filename)
+            # Prefix with index to ensure uniqueness (v4.1 fix for collisions)
+            unique_filename = f"{i}_{filename}"
+            output_path = os.path.join(output_dir, unique_filename)
             
             # Download file
             response = client.get(url, stream=True)
@@ -82,7 +84,7 @@ def execute(
                     f.write(chunk)
             
             downloaded_paths.append(output_path)
-            log(logger, "INFO", step, f"Successfully downloaded: {filename}")
+            log(logger, "INFO", step, f"Successfully downloaded ({i+1}/{file_count}): {unique_filename}")
             
         except Exception as e:
             log(logger, "ERROR", step, f"Failed to download {url}: {e}")

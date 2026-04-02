@@ -136,7 +136,6 @@ def _fetch_session_from_api(
         proxy_https=settings.proxy_https,
     )
     client = HttpClient(temp_settings)
-    log(logger, "INFO", step, f"Settings: {settings}")
     try:
         response = client.get("/api/auth/session")
         response.raise_for_status()
