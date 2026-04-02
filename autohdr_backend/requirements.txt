@@ -1,0 +1,14 @@
+# Core
+requests>=2.31.0
+python-dotenv>=1.0.0
+fastapi>=0.100.0
+uvicorn>=0.22.0
+python-multipart>=0.0.6
+
+# Testing
+pytest>=7.4.0
+pytest-mock>=3.11.0
+responses>=0.23.0
+
+# Utilities (optional, for development)
+pytest-cov>=4.1.0

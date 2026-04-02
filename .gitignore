@@ -1,0 +1,40 @@
+# === Python ===
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# === Node.js ===
+node_modules/
+autohdr_frontend/dist/
+
+# === Environment & Secrets ===
+.env
+.env.local
+.env.*.local
+cookie.txt
+
+# === IDE ===
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# === OS ===
+.DS_Store
+Thumbs.db
+
+# === Application Data ===
+autohdr_backend/resources/
+*.log
+
+# === Testing ===
+.pytest_cache/
+.coverage
+htmlcov/

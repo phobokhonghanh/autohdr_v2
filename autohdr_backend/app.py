@@ -1,0 +1,317 @@
+"""
+AutoHDR Backend API Service.
+
+Exposes the AutoHDR pipeline as a REST API for the frontend.
+Provides endpoints for session validation, processing, and log retrieval.
+"""
+
+import os
+import json
+import uuid
+import logging
+import asyncio
+import shutil
+from typing import List, Optional, Dict
+from datetime import datetime
+from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+
+from config.settings import Settings
+from core.http_client import HttpClient
+from core.logger import LogCollector, get_logger, log, add_file_handler
+from models.schemas import PipelineContext
+from steps import (
+    step0_session,
+    step1_presigned_urls,
+    step2_upload_files,
+    step3_finalize_upload,
+    step4_associate_and_run,
+    step5_poll_status,
+    step6_get_processed_urls,
+    step7_download_photos,
+)
+
+app = FastAPI(title="AutoHDR API Service")
+
+# Enable CORS for frontend
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Global dictionary to store logs for each run
+# In a production app, use Redis or a database.
+processing_jobs: Dict[str, Dict] = {}
+
+class SessionRequest(BaseModel):
+    cookie: Optional[str] = None
+    email: Optional[str] = None
+
+class ProcessRequest(BaseModel):
+    cookie: Optional[str] = None
+    email: Optional[str] = None
+    address: str
+
+@app.post("/api/session")
+async def resolve_session(req: SessionRequest):
+    """Resolve session info from cookie or email."""
+    settings = Settings.from_env()
+    resolved_settings = step0_session.execute(
+        settings=settings,
+        cookie=req.cookie,
+        email=req.email,
+    )
+    
+    if not resolved_settings.cookie:
+        raise HTTPException(status_code=401, detail="Authentication failed or expired")
+    
+    return {
+        "email": resolved_settings.email,
+        "user_id": resolved_settings.user_id,
+        "firstname": resolved_settings.firstname,
+        "lastname": resolved_settings.lastname,
+    }
+
+def run_pipeline_task(job_id: str, file_paths: List[str], address: str, settings: Settings, cookie: Optional[str], email: Optional[str]):
+    """Background task to run the full pipeline and capture logs in a thread."""
+    job = processing_jobs[job_id]
+    job["status"] = "processing"
+    
+    # Setup log collector
+    collector = LogCollector()
+    root_logger = logging.getLogger()
+    
+    # Ensure root logger correctly captures INFO logs from all modules
+    root_logger.setLevel(logging.INFO)
+    root_logger.addHandler(collector)
+    
+    # Start capturing to user-specific and dated log file
+    user_email = email or settings.email
+    today = datetime.now().strftime("%Y-%m-%d")
+    log_path = os.path.join(settings.get_user_logs_dir(user_email), f"{today}.log")
+    file_handler = add_file_handler(root_logger, log_path, mode="a")
+    
+    # Add a starting separator for this run in the file
+    with open(log_path, "a", encoding="utf-8") as f:
+        f.write(f"\n{'='*50}\n")
+        f.write(f"Run ID: {job_id} | Time: {datetime.now().strftime('%H:%M:%S')} | Address: {address}\n")
+        f.write(f"{'='*50}\n")
+    
+    # Crucial: Point job["logs"] to the collector's list for realtime updates
+    job["logs"] = collector.records
+    
+    try:
+        # Step 0 (Execute again to capture logs in this job context)
+        log(root_logger, "INFO", 0, "Init session")
+        settings = step0_session.execute(settings, cookie, email)
+        if not settings.cookie: raise Exception("Step 0 failed: Not found cookie")
+
+        # Initialize Context
+        context = PipelineContext(
+            file_paths=file_paths,
+            address=address,
+            email=settings.email,
+            firstname=settings.firstname,
+            lastname=settings.lastname,
+            user_id=settings.user_id,
+        )
+        
+        client = HttpClient(settings)
+        
+        # Step 1
+        log(root_logger, "INFO", 1, "Generate presigned URLs")
+        context = step1_presigned_urls.execute(client, context, settings.get_user_input_dir(user_email))
+        if not context: raise Exception("Step 1 failed")
+
+        # Step 2
+        log(root_logger, "INFO", 2, "Upload files to S3")
+        if not step2_upload_files.execute(client, context): raise Exception("Step 2 failed")
+        
+        # Step 3
+        log(root_logger, "INFO", 3, "Finalize upload")
+        if not step3_finalize_upload.execute(client, context.unique_str): raise Exception("Step 3 failed")
+        
+        # Step 4
+        log(root_logger, "INFO", 4, "Run processing pipeline")
+        if not step4_associate_and_run.execute(
+            client=client, unique_str=context.unique_str, email=context.email,
+            firstname=context.firstname, lastname=context.lastname,
+            address=context.address, files_count=len(context.filenames)
+        ): raise Exception("Step 4 failed")
+        
+        # Step 5
+        log(root_logger, "INFO", 5, "Poll processing status")
+        photoshoot_id = step5_poll_status.execute(client, settings, context.unique_str, context.address)
+        if not photoshoot_id: raise Exception("Step 5 failed")
+        context.photoshoot_id = photoshoot_id
+        
+        # Step 6
+        log(root_logger, "INFO", 6, "Get processed URLs")
+        context.processed_urls = step6_get_processed_urls.execute(
+            client, context.photoshoot_id, context.unique_str, context.filenames, settings.photoshoot_page_size
+        )
+        
+        # Step 7
+        log(root_logger, "INFO", 7, "Download processed photos")
+        if not step7_download_photos.execute(
+            client, settings, context.processed_urls, context.unique_str, context.address, context.email
+        ): raise Exception("Step 7 failed")
+        
+        job["status"] = "completed"
+        job["results"] = context.processed_urls
+        job["unique_str"] = context.unique_str
+        
+    except Exception as e:
+        log(root_logger, "ERROR", 0, f"Pipeline failed: {str(e)}")
+        job["status"] = "failed"
+        job["error"] = str(e)
+    finally:
+        root_logger.removeHandler(collector)
+        root_logger.removeHandler(file_handler)
+        file_handler.close()
+        
+        # Add ending separator to the file
+        today = datetime.now().strftime("%Y-%m-%d")
+        log_path = os.path.join(settings.get_user_logs_dir(user_email), f"{today}.log")
+        with open(log_path, "a", encoding="utf-8") as f:
+            status_text = job.get('status', 'unknown').upper()
+            f.write(f"\nRun ID: {job_id} | Status: {status_text}\n")
+            f.write(f"{'='*50}\n\n")
+
+@app.post("/api/process")
+async def process_photos(
+    background_tasks: BackgroundTasks,
+    address: str = Form(...),
+    cookie: Optional[str] = Form(None),
+    email: Optional[str] = Form(None),
+    files: List[UploadFile] = File(...)
+):
+    """Upload files locally and trigger the pipeline in background."""
+    settings = Settings.from_env()
+    resolved_settings = step0_session.execute(settings, cookie, email)
+    
+    if not resolved_settings.cookie:
+        raise HTTPException(status_code=401, detail="Authentication failed")
+    
+    job_id = str(uuid.uuid4())
+    
+    # Create temp directory for uploads inside user folder
+    user_email = resolved_settings.email
+    temp_dir = os.path.join(settings.get_user_dir(user_email), "temp", job_id)
+    os.makedirs(temp_dir, exist_ok=True)
+    
+    file_paths = []
+    for file in files:
+        path = os.path.join(temp_dir, file.filename)
+        with open(path, "wb") as f:
+            f.write(await file.read())
+        file_paths.append(path)
+    
+    processing_jobs[job_id] = {
+        "status": "pending",
+        "logs": [],
+        "address": address,
+        "job_id": job_id
+    }
+    
+    background_tasks.add_task(run_pipeline_task, job_id, file_paths, address, resolved_settings, cookie, email)
+    
+    return {"job_id": job_id}
+
+@app.get("/api/status/{job_id}")
+async def get_status(job_id: str):
+    """Get status and logs of a processing job (one-shot)."""
+    job = processing_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
+
+
+@app.get("/api/stream/{job_id}")
+async def stream_job(job_id: str, offset: int = 0):
+    """SSE endpoint that streams log lines and status changes in real-time."""
+    job = processing_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    async def event_generator():
+        last_log_count = offset
+        last_status = None
+        heartbeat_interval = 15  # seconds
+        last_heartbeat = asyncio.get_event_loop().time()
+
+        while True:
+            # Send heartbeat to keep connection alive (Railway/proxies)
+            now = asyncio.get_event_loop().time()
+            if now - last_heartbeat >= heartbeat_interval:
+                yield ": keepalive\n\n"
+                last_heartbeat = now
+            current_job = processing_jobs.get(job_id)
+            if not current_job:
+                break
+
+            # Stream new log lines
+            logs = current_job.get("logs", [])
+            if len(logs) > last_log_count:
+                for line in logs[last_log_count:]:
+                    yield f"event: log\ndata: {json.dumps({'line': line})}\n\n"
+                last_log_count = len(logs)
+
+            # Stream status changes
+            current_status = current_job.get("status")
+            if current_status != last_status:
+                last_status = current_status
+                status_data = {"status": current_status}
+                if current_status == "completed":
+                    status_data["results"] = current_job.get("results", [])
+                    status_data["unique_str"] = current_job.get("unique_str", "")
+                elif current_status == "failed":
+                    status_data["error"] = current_job.get("error", "")
+                yield f"event: status\ndata: {json.dumps(status_data)}\n\n"
+
+            # If terminal state, send final logs and close
+            if current_status in ("completed", "failed"):
+                # One final flush of any remaining logs
+                logs = current_job.get("logs", [])
+                if len(logs) > last_log_count:
+                    for line in logs[last_log_count:]:
+                        yield f"event: log\ndata: {json.dumps({'line': line})}\n\n"
+                break
+
+            await asyncio.sleep(0.5)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.get("/api/jobs/active")
+async def get_active_jobs():
+    """Return list of active (pending/processing) job IDs."""
+    active = []
+    for job_id, job in processing_jobs.items():
+        if job.get("status") in ("pending", "processing"):
+            active.append({"job_id": job_id, "status": job["status"], "address": job.get("address", "")})
+    return {"active_jobs": active}
+
+
+@app.get("/health")
+async def health_check():
+    """Health check for deployment platforms."""
+    return {"status": "ok", "timestamp": datetime.now().isoformat()}
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)

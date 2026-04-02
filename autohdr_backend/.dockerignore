@@ -1,0 +1,13 @@
+venv/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+tests/
+.env
+.env.example
+resources/
+*.log
+.git/
+README.md
+context_ai.md
