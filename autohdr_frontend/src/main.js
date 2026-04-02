@@ -416,13 +416,15 @@ function showResults(results) {
   if (!results || results.length === 0) return;
 
   resultsGrid.innerHTML = results.map(url => {
-    const filename = url.split('/').pop().split('?')[0];
+    // Handle relative URLs from backend
+    const absoluteUrl = url.startsWith('/') ? `${API_BASE}${url}` : url;
+    const filename = absoluteUrl.split('/').pop().split('?')[0];
     return `
             <div class="result-item">
                 <div class="result-img-placeholder">📸</div>
                 <div class="result-info">
                     <div class="result-filename">${filename}</div>
-                    <a href="${url}" target="_blank" class="download-link" data-filename="${filename}">Download</a>
+                    <a href="${absoluteUrl}" target="_blank" class="download-link" data-filename="${filename}">Download</a>
                 </div>
             </div>
         `;
@@ -439,9 +441,10 @@ async function triggerDownloads(results) {
   });
 
   for (const url of results) {
-    const filename = url.split('/').pop().split('?')[0];
+    const absoluteUrl = url.startsWith('/') ? `${API_BASE}${url}` : url;
+    const filename = absoluteUrl.split('/').pop().split('?')[0];
     const a = document.createElement("a");
-    a.href = url;
+    a.href = absoluteUrl;
     a.setAttribute("download", filename);
     a.style.display = "none";
     document.body.appendChild(a);

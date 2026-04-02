@@ -12,10 +12,12 @@ import logging
 import asyncio
 import shutil
 from typing import List, Optional, Dict
-from datetime import datetime
-from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, HTTPException
+from datetime import datetime, timedelta
+import zipfile
+from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from config.settings import Settings
@@ -31,6 +33,7 @@ from steps import (
     step5_poll_status,
     step6_get_processed_urls,
     step7_download_photos,
+    step8_zip_files,
 )
 
 app = FastAPI(title="AutoHDR API Service")
@@ -38,11 +41,30 @@ app = FastAPI(title="AutoHDR API Service")
 # Enable CORS for frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "https://hdr-trick.vercel.app",
+        "http://localhost:5173",
+        "http://127.0.0.1:5173",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Serves the resources directory statically
+app.mount("/resources", StaticFiles(directory="resources"), name="resources")
+
+@app.middleware("http")
+async def catch_exceptions_middleware(request: Request, call_next):
+    try:
+        return await call_next(request)
+    except Exception as e:
+        import traceback
+        log(logger, "ERROR", 0, f"Lỗi hệ thống không xác định: {str(e)}\n{traceback.format_exc()}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "Internal Server Error", "error": str(e)}
+        )
 
 # Global dictionary to store logs for each run
 # In a production app, use Redis or a database.
@@ -158,12 +180,21 @@ def run_pipeline_task(job_id: str, file_paths: List[str], address: str, settings
         
         # Step 7
         log(root_logger, "INFO", 7, "Download processed photos")
-        if not step7_download_photos.execute(
-            client, settings, context.processed_urls, context.unique_str, context.address, context.email
-        ): raise Exception("Step 7 failed")
+        downloaded_paths = step7_download_photos.execute(
+            client, settings, context.processed_urls, context.unique_str, context.address, context.email, job_id
+        )
+        if not downloaded_paths: raise Exception("Step 7 failed: No photos downloaded")
+        
+        # Step 8: Zip and Cleanup
+        log(root_logger, "INFO", 8, "Zipping and cleaning up")
+        result_urls = step8_zip_files.execute(settings, email, job_id, downloaded_paths, context.unique_str)
+        if not result_urls: raise Exception("Step 8 failed: No results generated")
+        
+        # Cleanup stale temp data (3 days policy)
+        step8_zip_files.cleanup_stale_data(settings, email, days=3)
         
         job["status"] = "completed"
-        job["results"] = context.processed_urls
+        job["results"] = result_urls
         job["unique_str"] = context.unique_str
         
     except Exception as e:
@@ -171,6 +202,16 @@ def run_pipeline_task(job_id: str, file_paths: List[str], address: str, settings
         job["status"] = "failed"
         job["error"] = str(e)
     finally:
+        # Update Quota: ONLY after successful completion and result delivery
+        if job.get("status") == "completed" and job.get("results"):
+            try:
+                # Use the count of processed URLs (what the user actually gets)
+                success_count = len(context.processed_urls)
+                step8_zip_files.update_user_quota(settings.quota_file, user_email, success_count, context.unique_str)
+                log(root_logger, "INFO", 0, f"Quota updated in finally: +{success_count} photos for {user_email}")
+            except Exception as e:
+                log(root_logger, "ERROR", 0, f"Failed to update quota in finally: {e}")
+
         root_logger.removeHandler(collector)
         root_logger.removeHandler(file_handler)
         file_handler.close()
@@ -192,6 +233,8 @@ async def process_photos(
     files: List[UploadFile] = File(...)
 ):
     """Upload files locally and trigger the pipeline in background."""
+    log(logger, "INFO", 0, f"Nhận yêu cầu xử lý từ: {email or 'unknown'}")
+    
     settings = Settings.from_env()
     resolved_settings = step0_session.execute(settings, cookie, email)
     
@@ -199,18 +242,24 @@ async def process_photos(
         raise HTTPException(status_code=401, detail="Authentication failed")
     
     job_id = str(uuid.uuid4())
-    
-    # Create temp directory for uploads inside user folder
     user_email = resolved_settings.email
+    
+    # Create temp directory for uploads
     temp_dir = os.path.join(settings.get_user_dir(user_email), "temp", job_id)
     os.makedirs(temp_dir, exist_ok=True)
     
     file_paths = []
     for file in files:
         path = os.path.join(temp_dir, file.filename)
-        with open(path, "wb") as f:
-            f.write(await file.read())
-        file_paths.append(path)
+        # Use buffered reading to avoid OOM for large files and keep event loop alive
+        try:
+            with open(path, "wb") as buffer:
+                while chunk := await file.read(1024 * 1024):  # 1MB chunks
+                    buffer.write(chunk)
+            file_paths.append(path)
+        except Exception as e:
+            log(logger, "ERROR", 0, f"Lỗi khi lưu file {file.filename}: {e}")
+            raise HTTPException(status_code=500, detail=f"Could not save file: {file.filename}")
     
     processing_jobs[job_id] = {
         "status": "pending",

@@ -8,12 +8,27 @@ Hệ thống được thiết kế để deploy hoàn toàn miễn phí trên **
 
 ### 1. Backend (Railway)
 
-Railway được chọn vì hỗ trợ SSE (Server-Sent Events) ổn định với cơ chế keepalive.
+Railway được chọn vì hỗ trợ SSE (Server-Sent Events) ổn định nhờ cơ chế heartbeat :keepalive.
 
-1. **Connect**: Kết nối dịch vụ Railway với repository GitHub của bạn.
-2. **Root Directory**: Chọn thư mục `/autohdr_backend`.
-3. **Environment**: Copy các biến từ file `.env` cục bộ vào Railway Dashboard.
-4. **Auto-deploy**: Mỗi khi push lên nhánh `main`, Railway sẽ tự động build và deploy dựa trên `railway.toml`.
+> [!IMPORTANT]
+> **BẮT BUỘC**: Bạn phải chỉnh **Root Directory** thành `/autohdr_backend` trong cài đặt của Railway, nếu không build sẽ lỗi.
+
+1.  **Connect**: Truy cập [Railway.app](https://railway.app), tạo project mới và kết nối với repository GitHub của bạn (`phobokhonghanh/autohdr_v2`).
+2.  **Cấu hình Root Directory (Làm ngay sau khi connect)**: 
+    *   Vào service vừa tạo -> **Settings** -> **General**.
+    *   Tìm mục **Root Directory** và điền: `/autohdr_backend`.
+    *   Nhấn **Save**. Railway sẽ tự động trigger lại một bản build mới đúng chuẩn.
+3.  **Environment Variables**: Thêm các biến sau vào tab **Variables**:
+    *   `PORT`: `8000`
+    *   `AUTOHDR_RESOURCES_DIR`: `/app/resources`
+    *   Copy toàn bộ các biến từ file `.env` cục bộ.
+4.  **Volumes (Quan trọng)**: 
+    *   Vào tab **Settings** -> **Volumes** -> **Add Volume**.
+    *   Mount Path: `/app/resources`.
+5.  **Networking**: Railway sẽ cấp domain public trong mục **Public Networking**.
+
+#### 💡 Khắc phục lỗi "Railpack could not determine how to build the app"
+Nếu bạn gặp lỗi này, nghĩa là Railway đang cố build từ thư mục gốc (root) của repo. Hãy thực hiện Bước 2 ở trên để chỉ định Railway build trong thư mục `/autohdr_backend`.
 
 ### 2. Frontend (Vercel)
 
