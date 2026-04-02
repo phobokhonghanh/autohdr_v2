@@ -33,6 +33,7 @@ secrets.*
 # Root-level step*.py and v*.md are often for reference or local testing
 step*.py
 v*.md
+v*.*.md
 
 # === IDE ===
 .vscode/
