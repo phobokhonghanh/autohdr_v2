@@ -28,12 +28,8 @@ cookie.txt
 *.pfx
 secrets.*
 
-# === Development Scripts & Notes ===
-# The core logic is in autohdr_backend/ and autohdr_frontend/
-# Root-level step*.py and v*.md are often for reference or local testing
-step*.py
-v*.md
-v*.*.md
+# === Documentation ===
+docs/
 
 # === IDE ===
 .vscode/

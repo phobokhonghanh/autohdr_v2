@@ -12,10 +12,12 @@ import logging
 import asyncio
 import shutil
 from typing import List, Optional, Dict
-from datetime import datetime
-from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, HTTPException
+from datetime import datetime, timedelta
+import zipfile
+from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from config.settings import Settings
@@ -31,6 +33,7 @@ from steps import (
     step5_poll_status,
     step6_get_processed_urls,
     step7_download_photos,
+    step8_zip_files,
 )
 
 app = FastAPI(title="AutoHDR API Service")
@@ -47,6 +50,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Serves the resources directory statically
+app.mount("/resources", StaticFiles(directory="resources"), name="resources")
 
 @app.middleware("http")
 async def catch_exceptions_middleware(request: Request, call_next):
@@ -174,12 +180,21 @@ def run_pipeline_task(job_id: str, file_paths: List[str], address: str, settings
         
         # Step 7
         log(root_logger, "INFO", 7, "Download processed photos")
-        if not step7_download_photos.execute(
-            client, settings, context.processed_urls, context.unique_str, context.address, context.email
-        ): raise Exception("Step 7 failed")
+        downloaded_paths = step7_download_photos.execute(
+            client, settings, context.processed_urls, context.unique_str, context.address, context.email, job_id
+        )
+        if not downloaded_paths: raise Exception("Step 7 failed: No photos downloaded")
+        
+        # Step 8: Zip and Cleanup
+        log(root_logger, "INFO", 8, "Zipping and cleaning up")
+        result_urls = step8_zip_files.execute(settings, email, job_id, downloaded_paths, context.unique_str)
+        if not result_urls: raise Exception("Step 8 failed: No results generated")
+        
+        # Cleanup stale temp data (3 days policy)
+        step8_zip_files.cleanup_stale_data(settings, email, days=3)
         
         job["status"] = "completed"
-        job["results"] = context.processed_urls
+        job["results"] = result_urls
         job["unique_str"] = context.unique_str
         
     except Exception as e:
@@ -187,6 +202,16 @@ def run_pipeline_task(job_id: str, file_paths: List[str], address: str, settings
         job["status"] = "failed"
         job["error"] = str(e)
     finally:
+        # Update Quota: ONLY after successful completion and result delivery
+        if job.get("status") == "completed" and job.get("results"):
+            try:
+                # Use the count of processed URLs (what the user actually gets)
+                success_count = len(context.processed_urls)
+                step8_zip_files.update_user_quota(settings.quota_file, user_email, success_count, context.unique_str)
+                log(root_logger, "INFO", 0, f"Quota updated in finally: +{success_count} photos for {user_email}")
+            except Exception as e:
+                log(root_logger, "ERROR", 0, f"Failed to update quota in finally: {e}")
+
         root_logger.removeHandler(collector)
         root_logger.removeHandler(file_handler)
         file_handler.close()
