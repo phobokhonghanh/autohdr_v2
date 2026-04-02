@@ -15,9 +15,24 @@ autohdr_frontend/dist/
 
 # === Environment & Secrets ===
 .env
+.env.*
+!.env.example
 .env.local
 .env.*.local
 cookie.txt
+*.key
+*.pem
+*.p12
+*.cert
+*.crt
+*.pfx
+secrets.*
+
+# === Development Scripts & Notes ===
+# The core logic is in autohdr_backend/ and autohdr_frontend/
+# Root-level step*.py and v*.md are often for reference or local testing
+step*.py
+v*.md
 
 # === IDE ===
 .vscode/
