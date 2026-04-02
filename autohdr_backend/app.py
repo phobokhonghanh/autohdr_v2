@@ -48,6 +48,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.middleware("http")
+async def catch_exceptions_middleware(request: Request, call_next):
+    try:
+        return await call_next(request)
+    except Exception as e:
+        import traceback
+        log(logger, "ERROR", 0, f"Lỗi hệ thống không xác định: {str(e)}\n{traceback.format_exc()}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "Internal Server Error", "error": str(e)}
+        )
+
 # Global dictionary to store logs for each run
 # In a production app, use Redis or a database.
 processing_jobs: Dict[str, Dict] = {}
@@ -196,6 +208,8 @@ async def process_photos(
     files: List[UploadFile] = File(...)
 ):
     """Upload files locally and trigger the pipeline in background."""
+    log(logger, "INFO", 0, f"Nhận yêu cầu xử lý từ: {email or 'unknown'}")
+    
     settings = Settings.from_env()
     resolved_settings = step0_session.execute(settings, cookie, email)
     
@@ -203,18 +217,24 @@ async def process_photos(
         raise HTTPException(status_code=401, detail="Authentication failed")
     
     job_id = str(uuid.uuid4())
-    
-    # Create temp directory for uploads inside user folder
     user_email = resolved_settings.email
+    
+    # Create temp directory for uploads
     temp_dir = os.path.join(settings.get_user_dir(user_email), "temp", job_id)
     os.makedirs(temp_dir, exist_ok=True)
     
     file_paths = []
     for file in files:
         path = os.path.join(temp_dir, file.filename)
-        with open(path, "wb") as f:
-            f.write(await file.read())
-        file_paths.append(path)
+        # Use buffered reading to avoid OOM for large files and keep event loop alive
+        try:
+            with open(path, "wb") as buffer:
+                while chunk := await file.read(1024 * 1024):  # 1MB chunks
+                    buffer.write(chunk)
+            file_paths.append(path)
+        except Exception as e:
+            log(logger, "ERROR", 0, f"Lỗi khi lưu file {file.filename}: {e}")
+            raise HTTPException(status_code=500, detail=f"Could not save file: {file.filename}")
     
     processing_jobs[job_id] = {
         "status": "pending",
