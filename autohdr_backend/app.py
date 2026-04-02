@@ -37,6 +37,7 @@ from steps import (
 )
 
 app = FastAPI(title="AutoHDR API Service")
+logger = get_logger("autohdr_api")
 
 # Enable CORS for frontend
 app.add_middleware(
@@ -203,12 +204,14 @@ def run_pipeline_task(job_id: str, file_paths: List[str], address: str, settings
         job["error"] = str(e)
     finally:
         # Update Quota: ONLY after successful completion and result delivery
-        if job.get("status") == "completed" and job.get("results"):
+        # We also need to ensure 'context' was successfully initialized
+        if job.get("status") == "completed" and job.get("results") and 'context' in locals():
             try:
                 # Use the count of processed URLs (what the user actually gets)
                 success_count = len(context.processed_urls)
-                step8_zip_files.update_user_quota(settings.quota_file, user_email, success_count, context.unique_str)
-                log(root_logger, "INFO", 0, f"Quota updated in finally: +{success_count} photos for {user_email}")
+                target_email = user_email if 'user_email' in locals() else settings.email
+                step8_zip_files.update_user_quota(settings.quota_file, target_email, success_count, context.unique_str)
+                log(root_logger, "INFO", 0, f"Quota updated in finally: +{success_count} photos for {target_email}")
             except Exception as e:
                 log(root_logger, "ERROR", 0, f"Failed to update quota in finally: {e}")
 
