@@ -443,18 +443,34 @@ async function triggerDownloads(results) {
   for (const url of results) {
     const absoluteUrl = url.startsWith('/') ? `${API_BASE}${url}` : url;
     const filename = absoluteUrl.split('/').pop().split('?')[0];
-    const a = document.createElement("a");
-    a.href = absoluteUrl;
-    a.setAttribute("download", filename);
-    a.style.display = "none";
-    document.body.appendChild(a);
-    a.click();
 
-    // Small delay to allow browser to handle the download trigger
-    await new Promise(resolve => setTimeout(resolve, 500));
+    try {
+      // Use Blob approach to force download of cross-origin assets
+      const response = await fetch(absoluteUrl);
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+      const blob = await response.blob();
+      const blobUrl = window.URL.createObjectURL(blob);
 
-    document.body.removeChild(a);
-    markFileDownloaded(filename);
+      const a = document.createElement("a");
+      a.href = blobUrl;
+      a.setAttribute("download", filename);
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(blobUrl);
+
+      markFileDownloaded(filename);
+      console.log(`Download triggered for: ${filename}`);
+
+      // Small delay between multiple downloads
+      if (results.length > 1) {
+        await new Promise(resolve => setTimeout(resolve, 300));
+      }
+    } catch (err) {
+      console.error(`Download failed for ${absoluteUrl}:`, err);
+      // Fallback: simple link (browser might still open images in new tab)
+      window.open(absoluteUrl, '_blank');
+    }
   }
 }
 

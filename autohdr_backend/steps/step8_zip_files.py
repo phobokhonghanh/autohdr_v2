@@ -49,14 +49,17 @@ def execute(
 
     # 1. Determine local result and zipping logic
     final_results = []
+    log(logger, "INFO", step, f"Step 8 received {len(local_paths)} files to process")
+
     try:
         if len(local_paths) == 1:
             file_path = local_paths[0]
             relative_path = os.path.relpath(file_path, "resources")
             final_results = [f"/resources/{relative_path}"]
+            log(logger, "INFO", step, f"Returning single file: {final_results[0]}")
         else:
             # Multiple files: Zip them
-            log(logger, "INFO", step, f"Zipping {len(local_paths)} photos")
+            log(logger, "INFO", step, f"Zipping {len(local_paths)} photos into hdr_{job_id}.zip")
             zip_filename = f"hdr_{job_id}.zip"
             today_str = datetime.now().strftime("%Y-%m-%d")
             
@@ -79,11 +82,13 @@ def execute(
 
             relative_zip_path = os.path.relpath(zip_path, "resources")
             final_results = [f"/resources/{relative_zip_path}"]
+            log(logger, "INFO", step, f"Returning zip file: {final_results[0]}")
 
     except Exception as e:
         log(logger, "ERROR", step, f"Zip process failed: {e}")
         # Fallback if zip fails
         final_results = [f"/resources/{os.path.relpath(p, 'resources')}" for p in local_paths]
+        log(logger, "INFO", step, f"Fallback: returning {len(final_results)} individual files")
 
     return final_results
 

@@ -23,6 +23,7 @@ from pydantic import BaseModel
 from config.settings import Settings
 from core.http_client import HttpClient
 from core.logger import LogCollector, get_logger, log, add_file_handler
+from core import quota_manager
 from models.schemas import PipelineContext
 from steps import (
     step0_session,
@@ -186,13 +187,12 @@ def run_pipeline_task(job_id: str, file_paths: List[str], address: str, settings
         )
         if not downloaded_paths: raise Exception("Step 7 failed: No photos downloaded")
         
-        # Step 8: Zip and Cleanup
         log(root_logger, "INFO", 8, "Zipping and cleaning up")
-        result_urls = step8_zip_files.execute(settings, email, job_id, downloaded_paths, context.unique_str)
+        result_urls = step8_zip_files.execute(settings, user_email, job_id, downloaded_paths, context.unique_str)
         if not result_urls: raise Exception("Step 8 failed: No results generated")
         
         # Cleanup stale temp data (3 days policy)
-        step8_zip_files.cleanup_stale_data(settings, email, days=3)
+        step8_zip_files.cleanup_stale_data(settings, user_email, days=3)
         
         job["status"] = "completed"
         job["results"] = result_urls
@@ -210,7 +210,7 @@ def run_pipeline_task(job_id: str, file_paths: List[str], address: str, settings
                 # Use the count of processed URLs (what the user actually gets)
                 success_count = len(context.processed_urls)
                 target_email = user_email if 'user_email' in locals() else settings.email
-                step8_zip_files.update_user_quota(settings.quota_file, target_email, success_count, context.unique_str)
+                quota_manager.update_user_quota(settings.quota_file, target_email, success_count, context.unique_str)
                 log(root_logger, "INFO", 0, f"Quota updated in finally: +{success_count} photos for {target_email}")
             except Exception as e:
                 log(root_logger, "ERROR", 0, f"Failed to update quota in finally: {e}")
