@@ -80,6 +80,7 @@ class ProcessRequest(BaseModel):
     cookie: Optional[str] = None
     email: Optional[str] = None
     address: str
+    indoor_model_id: Optional[int] = 3
 
 @app.post("/api/session")
 async def resolve_session(req: SessionRequest):
@@ -101,7 +102,7 @@ async def resolve_session(req: SessionRequest):
         "lastname": resolved_settings.lastname,
     }
 
-def run_pipeline_task(job_id: str, file_paths: List[str], address: str, settings: Settings, cookie: Optional[str], email: Optional[str]):
+def run_pipeline_task(job_id: str, file_paths: List[str], address: str, settings: Settings, cookie: Optional[str], email: Optional[str], indoor_model_id: int = 3):
     """Background task to run the full pipeline and capture logs in a thread."""
     job = processing_jobs[job_id]
     job["status"] = "processing"
@@ -165,7 +166,8 @@ def run_pipeline_task(job_id: str, file_paths: List[str], address: str, settings
         if not step4_associate_and_run.execute(
             client=client, unique_str=context.unique_str, email=context.email,
             firstname=context.firstname, lastname=context.lastname,
-            address=context.address, files_count=len(context.filenames)
+            address=context.address, files_count=len(context.filenames),
+            indoor_model_id=indoor_model_id
         ): raise Exception("Step 4 failed")
         
         # Step 5
@@ -233,6 +235,7 @@ async def process_photos(
     address: str = Form(...),
     cookie: Optional[str] = Form(None),
     email: Optional[str] = Form(None),
+    indoor_model_id: Optional[int] = Form(3),
     files: List[UploadFile] = File(...)
 ):
     """Upload files locally and trigger the pipeline in background."""
@@ -243,6 +246,10 @@ async def process_photos(
     
     if not resolved_settings.cookie:
         raise HTTPException(status_code=401, detail="Authentication failed")
+    
+    # Validate indoor_model_id
+    if indoor_model_id not in [1, 3]:
+        indoor_model_id = 3  # Force default if invalid
     
     job_id = str(uuid.uuid4())
     user_email = resolved_settings.email
@@ -271,7 +278,7 @@ async def process_photos(
         "job_id": job_id
     }
     
-    background_tasks.add_task(run_pipeline_task, job_id, file_paths, address, resolved_settings, cookie, email)
+    background_tasks.add_task(run_pipeline_task, job_id, file_paths, address, resolved_settings, cookie, email, indoor_model_id)
     
     return {"job_id": job_id}
 

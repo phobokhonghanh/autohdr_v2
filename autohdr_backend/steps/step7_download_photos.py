@@ -72,8 +72,7 @@ def execute(
                 filename = f"photo_{i}.jpg"
             
             # Prefix with index to ensure uniqueness (v4.1 fix for collisions)
-            unique_filename = f"{i}_{filename}"
-            output_path = os.path.join(output_dir, unique_filename)
+            output_path = os.path.join(output_dir, filename)
             
             # Download file
             response = client.get(url, stream=True)
