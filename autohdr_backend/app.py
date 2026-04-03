@@ -22,8 +22,9 @@ from pydantic import BaseModel
 
 from config.settings import Settings
 from core.http_client import HttpClient
-from core.logger import LogCollector, get_logger, log, add_file_handler
+from core.logger import LogCollector, get_logger, log, add_file_handler, job_id_context
 from core import quota_manager
+from core.retry import retry_with_backoff
 from models.schemas import PipelineContext
 from steps import (
     step0_session,
@@ -104,11 +105,14 @@ async def resolve_session(req: SessionRequest):
 
 def run_pipeline_task(job_id: str, file_paths: List[str], address: str, settings: Settings, cookie: Optional[str], email: Optional[str], indoor_model_id: int = 3):
     """Background task to run the full pipeline and capture logs in a thread."""
+    # Set the job_id in context for logging isolation (v5)
+    token = job_id_context.set(job_id)
+    
     job = processing_jobs[job_id]
     job["status"] = "processing"
     
     # Setup log collector
-    collector = LogCollector()
+    collector = LogCollector(job_id=job_id)
     root_logger = logging.getLogger()
     
     # Ensure root logger correctly captures INFO logs from all modules
@@ -119,7 +123,7 @@ def run_pipeline_task(job_id: str, file_paths: List[str], address: str, settings
     user_email = email or settings.email
     today = datetime.now().strftime("%Y-%m-%d")
     log_path = os.path.join(settings.get_user_logs_dir(user_email), f"{today}.log")
-    file_handler = add_file_handler(root_logger, log_path, mode="a")
+    file_handler = add_file_handler(root_logger, log_path, mode="a", job_id=job_id)
     
     # Add a starting separator for this run in the file
     with open(log_path, "a", encoding="utf-8") as f:
@@ -131,10 +135,14 @@ def run_pipeline_task(job_id: str, file_paths: List[str], address: str, settings
     job["logs"] = collector.records
     
     try:
+        # File count limit check at the start of pipeline (v5)
+        if len(file_paths) > settings.limit_file:
+             raise Exception(f"Vượt quá giới hạn số lượng file ({len(file_paths)}/{settings.limit_file})")
+
         # Step 0 (Execute again to capture logs in this job context)
         log(root_logger, "INFO", 0, "Init session")
-        settings = step0_session.execute(settings, cookie, email)
-        if not settings.cookie: raise Exception("Step 0 failed: Not found cookie")
+        settings = retry_with_backoff(step0_session.execute, root_logger, 0, settings.retry_max_attempts, settings.retry_initial_delay, settings.retry_backoff_factor, "Retrying Step 0", True, settings, cookie, email)
+        if not settings or not settings.cookie: raise Exception("Step 0 failed: Not found cookie after retries")
 
         # Initialize Context
         context = PipelineContext(
@@ -150,48 +158,49 @@ def run_pipeline_task(job_id: str, file_paths: List[str], address: str, settings
         
         # Step 1
         log(root_logger, "INFO", 1, "Generate presigned URLs")
-        context = step1_presigned_urls.execute(client, context, settings.get_user_input_dir(user_email))
-        if not context: raise Exception("Step 1 failed")
+        context = retry_with_backoff(step1_presigned_urls.execute, root_logger, 1, settings.retry_max_attempts, settings.retry_initial_delay, settings.retry_backoff_factor, "Retrying Step 1", True, client, context, settings.get_user_input_dir(user_email))
+        if not context: raise Exception("Step 1 failed after retries")
 
         # Step 2
         log(root_logger, "INFO", 2, "Upload files to S3")
-        if not step2_upload_files.execute(client, context): raise Exception("Step 2 failed")
+        if not retry_with_backoff(step2_upload_files.execute, root_logger, 2, settings.retry_max_attempts, settings.retry_initial_delay, settings.retry_backoff_factor, "Retrying Step 2", True, client, context): raise Exception("Step 2 failed after retries")
         
         # Step 3
         log(root_logger, "INFO", 3, "Finalize upload")
-        if not step3_finalize_upload.execute(client, context.unique_str): raise Exception("Step 3 failed")
+        if not retry_with_backoff(step3_finalize_upload.execute, root_logger, 3, settings.retry_max_attempts, settings.retry_initial_delay, settings.retry_backoff_factor, "Retrying Step 3", True, client, context.unique_str): raise Exception("Step 3 failed after retries")
         
         # Step 4
         log(root_logger, "INFO", 4, "Run processing pipeline")
-        if not step4_associate_and_run.execute(
+        if not retry_with_backoff(step4_associate_and_run.execute, root_logger, 4, settings.retry_max_attempts, settings.retry_initial_delay, settings.retry_backoff_factor, "Retrying Step 4", True,
             client=client, unique_str=context.unique_str, email=context.email,
             firstname=context.firstname, lastname=context.lastname,
             address=context.address, files_count=len(context.filenames),
             indoor_model_id=indoor_model_id
-        ): raise Exception("Step 4 failed")
+        ): raise Exception("Step 4 failed after retries")
         
         # Step 5
         log(root_logger, "INFO", 5, "Poll processing status")
-        photoshoot_id = step5_poll_status.execute(client, settings, context.unique_str, context.address)
-        if not photoshoot_id: raise Exception("Step 5 failed")
+        photoshoot_id = retry_with_backoff(step5_poll_status.execute, root_logger, 5, settings.retry_max_attempts, settings.retry_initial_delay, settings.retry_backoff_factor, "Retrying Step 5", True, client, settings, context.unique_str, context.address)
+        if not photoshoot_id: raise Exception("Step 5 failed after retries")
         context.photoshoot_id = photoshoot_id
         
         # Step 6
         log(root_logger, "INFO", 6, "Get processed URLs")
-        context.processed_urls = step6_get_processed_urls.execute(
+        context.processed_urls = retry_with_backoff(step6_get_processed_urls.execute, root_logger, 6, settings.retry_max_attempts, settings.retry_initial_delay, settings.retry_backoff_factor, "Retrying Step 6", True,
             client, context.photoshoot_id, context.unique_str, context.filenames, settings.photoshoot_page_size
         )
+        if not context.processed_urls: raise Exception("Step 6 failed after retries")
         
         # Step 7
         log(root_logger, "INFO", 7, "Download processed photos")
-        downloaded_paths = step7_download_photos.execute(
+        downloaded_paths = retry_with_backoff(step7_download_photos.execute, root_logger, 7, settings.retry_max_attempts, settings.retry_initial_delay, settings.retry_backoff_factor, "Retrying Step 7", True,
             client, settings, context.processed_urls, context.unique_str, context.address, context.email, job_id
         )
-        if not downloaded_paths: raise Exception("Step 7 failed: No photos downloaded")
+        if not downloaded_paths: raise Exception("Step 7 failed after retries")
         
         log(root_logger, "INFO", 8, "Zipping and cleaning up")
-        result_urls = step8_zip_files.execute(settings, user_email, job_id, downloaded_paths, context.unique_str)
-        if not result_urls: raise Exception("Step 8 failed: No results generated")
+        result_urls = retry_with_backoff(step8_zip_files.execute, root_logger, 8, settings.retry_max_attempts, settings.retry_initial_delay, settings.retry_backoff_factor, "Retrying Step 8", True, settings, user_email, job_id, downloaded_paths, context.unique_str)
+        if not result_urls: raise Exception("Step 8 failed after retries")
         
         # Cleanup stale temp data (3 days policy)
         step8_zip_files.cleanup_stale_data(settings, user_email, days=3)
@@ -221,6 +230,9 @@ def run_pipeline_task(job_id: str, file_paths: List[str], address: str, settings
         root_logger.removeHandler(file_handler)
         file_handler.close()
         
+        # Reset context
+        job_id_context.reset(token)
+        
         # Add ending separator to the file
         today = datetime.now().strftime("%Y-%m-%d")
         log_path = os.path.join(settings.get_user_logs_dir(user_email), f"{today}.log")
@@ -242,6 +254,11 @@ async def process_photos(
     log(logger, "INFO", 0, f"Nhận yêu cầu xử lý từ: {email or 'unknown'}")
     
     settings = Settings.from_env()
+    
+    # Immediate file count check (v5)
+    if len(files) > settings.limit_file:
+         raise HTTPException(status_code=400, detail=f"Vượt quá giới hạn số lượng file ({len(files)}/{settings.limit_file})")
+
     resolved_settings = step0_session.execute(settings, cookie, email)
     
     if not resolved_settings.cookie:
@@ -374,3 +391,4 @@ async def health_check():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+

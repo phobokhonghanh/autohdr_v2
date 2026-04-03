@@ -15,6 +15,7 @@ API: PUT to each presigned S3 URL
 """
 
 import os
+import time
 import logging
 from typing import List
 
@@ -88,6 +89,7 @@ def execute(client: HttpClient, context: PipelineContext) -> bool:
 
     Iterates through presigned URLs, reads corresponding local files
     as binary, and uploads each to S3 via PUT request.
+    Includes a 2-second delay between each file upload.
 
     Args:
         client: HTTP client instance.
@@ -104,7 +106,11 @@ def execute(client: HttpClient, context: PipelineContext) -> bool:
 
     all_success = True
 
-    for presigned_url in context.presigned_urls:
+    for i, presigned_url in enumerate(context.presigned_urls):
+        # Add 2s delay between files (v5 requirement)
+        if i > 0:
+            time.sleep(1)
+            
         filename = presigned_url.filename
 
         try:

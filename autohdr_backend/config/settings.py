@@ -106,6 +106,9 @@ class Settings:
     def get_user_dir(self, email: str) -> str:
         return os.path.join(self.users_dir, email)
 
+    def get_user_dir(self, email: str) -> str:
+        return os.path.join(self.users_dir, email)
+
     def get_user_input_dir(self, email: str) -> str:
         return os.path.join(self.get_user_dir(email), "input")
 
