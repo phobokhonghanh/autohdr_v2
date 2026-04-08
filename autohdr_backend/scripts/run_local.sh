@@ -29,6 +29,13 @@ source venv/bin/activate || { echo "Failed to activate virtual environment"; exi
 echo "Installing requirements from requirements.txt..."
 pip install -r requirements.txt || { echo "Failed to install requirements"; exit 1; }
 
+# Clean up port 8000 if it's already in use
+PORT=8000
+if lsof -Pi :$PORT -sTCP:LISTEN -t >/dev/null ; then
+    echo "Port $PORT already in use. Cleaning up..."
+    lsof -t -i:$PORT | xargs kill -9
+fi
+
 # Run the application
 echo "Starting AutoHDR Backend (app.py)..."
 python app.py

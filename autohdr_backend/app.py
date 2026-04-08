@@ -118,6 +118,50 @@ async def verify_key(req: KeyRequest):
     return {"status": "ok", "valid": True}
 
 
+# --- Admin API (Key Management) ---
+
+class AdminKeyListRequest(BaseModel):
+    password: str
+
+class AdminKeyAddRequest(BaseModel):
+    name: str
+    password: str
+    days: Optional[int] = 30
+    forever: Optional[bool] = False
+
+@app.post("/api/admin/keys/list")
+async def admin_list_keys(req: AdminKeyListRequest):
+    """List all keys (Admin only)."""
+    settings = Settings.from_env()
+    if req.password != settings.proxy_pass:
+        raise HTTPException(status_code=401, detail="Unauthorized: Invalid admin password")
+    
+    from core import key_manager
+    keys = key_manager.load_keys(settings.keys_file)
+    return [k.to_dict() for k in keys]
+
+@app.post("/api/admin/keys/add")
+async def admin_add_key(req: AdminKeyAddRequest):
+    """Add or update a key (Admin only)."""
+    settings = Settings.from_env()
+    if req.password != settings.proxy_pass:
+        raise HTTPException(status_code=401, detail="Unauthorized: Invalid admin password")
+    
+    from core import key_manager
+    from datetime import datetime, timedelta
+    
+    expiry = None
+    if not req.forever and req.days:
+        expiry_dt = datetime.utcnow() + timedelta(days=req.days)
+        expiry = expiry_dt.isoformat() + "Z"
+        
+    record, status = key_manager.add_or_update_key_by_name(settings.keys_file, req.name, expiry)
+    return {
+        "status": status,
+        "record": record.to_dict()
+    }
+
+
 def run_pipeline_task(job_id: str, file_paths: List[str], address: str, settings: Settings, cookie: Optional[str], email: Optional[str], indoor_model_id: int = 3, key: Optional[str] = None):
     """Background task to run the full pipeline and capture logs in a thread."""
     # Set the job_id in context for logging isolation (v5)
