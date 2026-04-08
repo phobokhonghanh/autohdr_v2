@@ -11,6 +11,10 @@ export default defineConfig({
         sourcemap: false,
         // Optimize chunk size
         rollupOptions: {
+            input: {
+                main: 'index.html',
+                admin: 'admin.html',
+            },
             output: {
                 manualChunks: undefined,
             },
