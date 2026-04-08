@@ -9,6 +9,7 @@ separate set of headers via the `get_s3_upload_headers` method.
 from typing import Optional
 
 import requests
+import random
 
 from config.settings import Settings
 
@@ -57,57 +58,43 @@ class HttpClient:
             }
         )
 
-        # Configure proxy if provided
-        if settings.proxies:
+        # Pick one random proxy from the list for this instance (job/session)
+        random_proxy_url = self._get_random_proxy_url()
+        if random_proxy_url:
+            self.session.proxies.update({"http": random_proxy_url, "https": random_proxy_url})
+        elif settings.proxies:
+            # Fallback to default proxies from settings/env if no list is provided
             self.session.proxies.update(settings.proxies)
+
+    def _get_random_proxy_url(self) -> Optional[str]:
+        """
+        Pick a random proxy URL from the settings list if available.
+        """
+        all_proxies = self.settings.all_proxies
+        if not all_proxies:
+            return None
+        return random.choice(all_proxies)
 
     def post(self, url: str, json_data: Optional[dict] = None, **kwargs) -> requests.Response:
         """
-        Send a POST request.
-
-        Args:
-            url: Full URL or path (will be joined with base_url if relative).
-            json_data: JSON payload to send.
-            **kwargs: Additional arguments passed to requests.Session.post.
-
-        Returns:
-            requests.Response object.
+        Send a POST request using the instance's chosen proxy.
         """
         full_url = self._build_url(url)
         return self.session.post(full_url, json=json_data, **kwargs)
 
     def get(self, url: str, params: Optional[dict] = None, **kwargs) -> requests.Response:
         """
-        Send a GET request.
-
-        Args:
-            url: Full URL or path (will be joined with base_url if relative).
-            params: Query parameters.
-            **kwargs: Additional arguments passed to requests.Session.get.
-
-        Returns:
-            requests.Response object.
+        Send a GET request using the instance's chosen proxy.
         """
         full_url = self._build_url(url)
         return self.session.get(full_url, params=params, **kwargs)
 
     def put_binary(self, url: str, data: bytes, headers: Optional[dict] = None) -> requests.Response:
         """
-        Send a PUT request with binary data (used for S3 upload).
-
-        This method does NOT use the default session headers.
-        It uses S3-specific headers instead.
-
-        Args:
-            url: Full S3 presigned URL.
-            data: Binary file content to upload.
-            headers: Custom headers for the upload. If None, uses default S3 headers.
-
-        Returns:
-            requests.Response object.
+        Send a PUT request with binary data using the instance's chosen proxy.
         """
         upload_headers = headers or self.get_s3_upload_headers()
-        return requests.put(url, data=data, headers=upload_headers)
+        return self.session.put(url, data=data, headers=upload_headers)
 
     def get_s3_upload_headers(self) -> dict:
         """
@@ -136,18 +123,9 @@ class HttpClient:
 
     def download_file(self, url: str) -> bytes:
         """
-        Download a file from a URL and return its binary content.
-
-        Args:
-            url: URL of the file to download.
-
-        Returns:
-            Binary content of the downloaded file.
-
-        Raises:
-            requests.HTTPError: If the download request fails.
+        Download a file from a URL using the instance's chosen proxy.
         """
-        response = requests.get(url, stream=True)
+        response = self.session.get(url, stream=True)
         response.raise_for_status()
         return response.content
 

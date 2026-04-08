@@ -32,11 +32,12 @@ def execute(
     unique_str: str,
     address: str,
     email: str,
-    job_id: Optional[str] = None
+    job_id: Optional[str] = None,
+    auth_mode: str = "quota"
 ) -> List[str]:
     """
     Execute Step 7: Download processed photos.
-    Check quota limits before download, but update quota after zipping in Step 8.
+    Check quota limits before download if auth_mode is 'quota'.
     """
     step = 7
     downloaded_paths = []
@@ -47,16 +48,19 @@ def execute(
 
     file_count = len(cleaned_urls)
 
-    # Load and check quota
-    records = load_quota(settings.quota_file)
-    quota = find_or_create_quota(
-        records, email, settings.limit_count, settings.limit_file
-    )
+    if auth_mode == "quota":
+        # Load and check quota
+        records = load_quota(settings.quota_file)
+        quota = find_or_create_quota(
+            records, email, settings.limit_count, settings.limit_file
+        )
 
-    quota_error = check_quota(quota, file_count)
-    if quota_error:
-        log(logger, "ERROR", step, quota_error)
-        return []
+        quota_error = check_quota(quota, file_count)
+        if quota_error:
+            log(logger, "ERROR", step, quota_error)
+            return []
+    else:
+        log(logger, "INFO", step, "Key mode active, skipping quota check before download.")
 
     # Setup output directory
     output_dir = os.path.join(settings.get_user_dir(email), "temp", job_id or unique_str)
@@ -64,6 +68,7 @@ def execute(
 
     log(logger, "INFO", step, f"Downloading {file_count} photos")
 
+    import time
     for i, url in enumerate(cleaned_urls):
         try:
             # Extract filename from URL
@@ -72,21 +77,37 @@ def execute(
                 filename = f"photo_{i}.jpg"
             
             # Prefix with index to ensure uniqueness (v4.1 fix for collisions)
-            output_path = os.path.join(output_dir, filename)
+            unique_filename = f"{i:03d}_{filename}"
+            output_path = os.path.join(output_dir, unique_filename)
             
-            # Download file
-            response = client.get(url, stream=True)
-            response.raise_for_status()
+            if i > 0:
+                time.sleep(1) # Prevent AWS block
+                
+            max_retries = 3
+            success = False
+            for attempt in range(max_retries):
+                try:
+                    # Download file
+                    response = client.get(url, stream=True)
+                    response.raise_for_status()
+                    
+                    with open(output_path, "wb") as f:
+                        for chunk in response.iter_content(chunk_size=8192):
+                            f.write(chunk)
+                    success = True
+                    break
+                except Exception as e:
+                    log(logger, "WARNING", step, f"Download failed, attempt {attempt+1}/{max_retries}: {e}")
+                    time.sleep(2 * (attempt + 1))
             
-            with open(output_path, "wb") as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    f.write(chunk)
-            
-            downloaded_paths.append(output_path)
-            log(logger, "INFO", step, f"Successfully downloaded ({i+1}/{file_count}): {unique_filename}")
+            if success:
+                downloaded_paths.append(output_path)
+                log(logger, "INFO", step, f"Successfully downloaded ({i+1}/{file_count}): {unique_filename}")
+            else:
+                log(logger, "ERROR", step, f"Failed to download after {max_retries} attempts: {url}")
             
         except Exception as e:
-            log(logger, "ERROR", step, f"Failed to download {url}: {e}")
+            log(logger, "ERROR", step, f"Unexpected error while downloading {url}: {e}")
 
     # Notice: Quota update is now handled in Step 8 (Post-Zip)
     return downloaded_paths
