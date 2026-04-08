@@ -1,7 +1,7 @@
 // AutoHDR Dashboard - Frontend (v4 — SSE + localStorage persistence + GA4)
 
 // Use Vite env variables with fallbacks
-const API_BASE = import.meta.env?.VITE_API_BASE || "http://100.122.90.44:8000";
+const API_BASE = import.meta.env?.VITE_API_BASE || "https://autohdr-backend.up.railway.app";
 const STORAGE_KEY = import.meta.env?.VITE_STORAGE_KEY || "autohdr_active_job";
 
 // --- Google Analytics Helper ---
