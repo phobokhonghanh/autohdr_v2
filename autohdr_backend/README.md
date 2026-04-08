@@ -190,6 +190,30 @@ Download quota được track trong file `quota.json`:
 ]
 ```
 
+## Quản lý Key (License)
+
+Hệ thống hỗ trợ quản lý Key để giới hạn quyền truy cập cho Desktop Client (EXE). Key được lưu trữ trong file `keys.json`.
+
+### Các câu lệnh quản lý:
+
+Sử dụng script `scripts/manage_keys.py` để quản lý:
+
+```bash
+# 1. Tạo Key mới cho một người dùng (mặc định 30 ngày)
+python scripts/manage_keys.py add --name "nguyen_vancouver" --days 30
+
+# 2. Tạo Key vĩnh viễn
+python scripts/manage_keys.py add --name "admin_pro" --forever
+
+# 3. Liệt kê danh sách các Key hiện có
+python scripts/manage_keys.py list
+```
+
+### Cách thức hoạt động:
+- Khi một Key được sử dụng lần đầu tiên trên một máy tính, nó sẽ tự động bị **khóa (locked)** vào máy đó thông qua `machine_id`.
+- Những yêu cầu từ máy tính khác sử dụng cùng một Key sẽ bị từ chối (403 Forbidden).
+- File `keys.json` được cấu hình qua biến `AUTOHDR_KEYS_FILE` trong `.env`.
+
 ## Log Format
 
 ```
