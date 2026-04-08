@@ -103,7 +103,22 @@ async def resolve_session(req: SessionRequest):
         "lastname": resolved_settings.lastname,
     }
 
-def run_pipeline_task(job_id: str, file_paths: List[str], address: str, settings: Settings, cookie: Optional[str], email: Optional[str], indoor_model_id: int = 3):
+class KeyRequest(BaseModel):
+    key: str
+    machine_id: Optional[str] = None
+
+@app.post("/api/key/active")
+async def verify_key(req: KeyRequest):
+    """Verify if a key is active and matches machine_id (locking)."""
+    settings = Settings.from_env()
+    from core import key_manager
+    is_valid = key_manager.check_key(settings.keys_file, req.key, req.machine_id)
+    if not is_valid:
+        raise HTTPException(status_code=403, detail="Key is invalid, expired, or used on another machine")
+    return {"status": "ok", "valid": True}
+
+
+def run_pipeline_task(job_id: str, file_paths: List[str], address: str, settings: Settings, cookie: Optional[str], email: Optional[str], indoor_model_id: int = 3, key: Optional[str] = None):
     """Background task to run the full pipeline and capture logs in a thread."""
     # Set the job_id in context for logging isolation (v5)
     token = job_id_context.set(job_id)
@@ -152,6 +167,7 @@ def run_pipeline_task(job_id: str, file_paths: List[str], address: str, settings
             firstname=settings.firstname,
             lastname=settings.lastname,
             user_id=settings.user_id,
+            auth_mode="key" if key else "quota"
         )
         
         client = HttpClient(settings)
@@ -167,7 +183,14 @@ def run_pipeline_task(job_id: str, file_paths: List[str], address: str, settings
         
         # Step 3
         log(root_logger, "INFO", 3, "Finalize upload")
-        if not retry_with_backoff(step3_finalize_upload.execute, root_logger, 3, settings.retry_max_attempts, settings.retry_initial_delay, settings.retry_backoff_factor, "Retrying Step 3", True, client, context.unique_str): raise Exception("Step 3 failed after retries")
+        if not step3_finalize_upload.execute(client, context.unique_str): raise Exception("Step 3 failed")
+        
+        # Cleanup input files locally
+        for fp in file_paths:
+            if os.path.exists(fp): 
+                try: os.remove(fp)
+                except Exception as e: pass
+        log(root_logger, "INFO", 3, "Cleaned up local temporary input files")
         
         # Step 4
         log(root_logger, "INFO", 4, "Run processing pipeline")
@@ -191,19 +214,25 @@ def run_pipeline_task(job_id: str, file_paths: List[str], address: str, settings
         )
         if not context.processed_urls: raise Exception("Step 6 failed after retries")
         
-        # Step 7
-        log(root_logger, "INFO", 7, "Download processed photos")
-        downloaded_paths = retry_with_backoff(step7_download_photos.execute, root_logger, 7, settings.retry_max_attempts, settings.retry_initial_delay, settings.retry_backoff_factor, "Retrying Step 7", True,
-            client, settings, context.processed_urls, context.unique_str, context.address, context.email, job_id
-        )
-        if not downloaded_paths: raise Exception("Step 7 failed after retries")
-        
-        log(root_logger, "INFO", 8, "Zipping and cleaning up")
-        result_urls = retry_with_backoff(step8_zip_files.execute, root_logger, 8, settings.retry_max_attempts, settings.retry_initial_delay, settings.retry_backoff_factor, "Retrying Step 8", True, settings, user_email, job_id, downloaded_paths, context.unique_str)
-        if not result_urls: raise Exception("Step 8 failed after retries")
-        
-        # Cleanup stale temp data (3 days policy)
-        step8_zip_files.cleanup_stale_data(settings, user_email, days=3)
+        if key:
+            # EXE Mode: Return direct URLs, skip server-side download
+            log(root_logger, "INFO", 7, "EXE mode: Returning direct S3 URLs to client. Skipping server download/zip.")
+            result_urls = context.processed_urls
+        else:
+            # Web Mode: Server downloads and zips
+            # Step 7
+            log(root_logger, "INFO", 7, "Download processed photos")
+            downloaded_paths = step7_download_photos.execute(
+                client, settings, context.processed_urls, context.unique_str, context.address, context.email, job_id, context.auth_mode
+            )
+            if not downloaded_paths: raise Exception("Step 7 failed: No photos downloaded")
+            
+            log(root_logger, "INFO", 8, "Zipping and cleaning up")
+            result_urls = step8_zip_files.execute(settings, user_email, job_id, downloaded_paths, context.unique_str)
+            if not result_urls: raise Exception("Step 8 failed: No results generated")
+            
+            # Cleanup stale temp data (3 days policy)
+            step8_zip_files.cleanup_stale_data(settings, user_email, days=3)
         
         job["status"] = "completed"
         job["results"] = result_urls
@@ -217,14 +246,17 @@ def run_pipeline_task(job_id: str, file_paths: List[str], address: str, settings
         # Update Quota: ONLY after successful completion and result delivery
         # We also need to ensure 'context' was successfully initialized
         if job.get("status") == "completed" and job.get("results") and 'context' in locals():
-            try:
-                # Use the count of processed URLs (what the user actually gets)
-                success_count = len(context.processed_urls)
-                target_email = user_email if 'user_email' in locals() else settings.email
-                quota_manager.update_user_quota(settings.quota_file, target_email, success_count, context.unique_str)
-                log(root_logger, "INFO", 0, f"Quota updated in finally: +{success_count} photos for {target_email}")
-            except Exception as e:
-                log(root_logger, "ERROR", 0, f"Failed to update quota in finally: {e}")
+            if getattr(context, 'auth_mode', 'quota') == 'quota':
+                try:
+                    # Use the count of processed URLs (what the user actually gets)
+                    success_count = len(context.processed_urls)
+                    target_email = user_email if 'user_email' in locals() else settings.email
+                    quota_manager.update_user_quota(settings.quota_file, target_email, success_count, context.unique_str)
+                    log(root_logger, "INFO", 0, f"Quota updated in finally: +{success_count} photos for {target_email}")
+                except Exception as e:
+                    log(root_logger, "ERROR", 0, f"Failed to update quota in finally: {e}")
+            else:
+                log(root_logger, "INFO", 0, "Key mode used, skipping quota update.")
 
         root_logger.removeHandler(collector)
         root_logger.removeHandler(file_handler)
@@ -247,14 +279,22 @@ async def process_photos(
     address: str = Form(...),
     cookie: Optional[str] = Form(None),
     email: Optional[str] = Form(None),
+    key: Optional[str] = Form(None),
+    machine_id: Optional[str] = Form(None),
     indoor_model_id: Optional[int] = Form(3),
     files: List[UploadFile] = File(...)
 ):
     """Upload files locally and trigger the pipeline in background."""
-    log(logger, "INFO", 0, f"Nhận yêu cầu xử lý từ: {email or 'unknown'}")
+    log(logger, "INFO", 0, f"Nhận yêu cầu xử lý từ: {email or 'unknown'}, mode: {'KEY' if key else 'QUOTA'}")
     
     settings = Settings.from_env()
     
+    # If key is provided, validate it first
+    if key:
+        from core import key_manager
+        if not key_manager.check_key(settings.keys_file, key, machine_id):
+            raise HTTPException(status_code=403, detail="Key is invalid, expired, or used on another machine")
+
     # Immediate file count check (v5)
     if len(files) > settings.limit_file:
          raise HTTPException(status_code=400, detail=f"Vượt quá giới hạn số lượng file ({len(files)}/{settings.limit_file})")
@@ -295,7 +335,7 @@ async def process_photos(
         "job_id": job_id
     }
     
-    background_tasks.add_task(run_pipeline_task, job_id, file_paths, address, resolved_settings, cookie, email, indoor_model_id)
+    background_tasks.add_task(run_pipeline_task, job_id, file_paths, address, resolved_settings, cookie, email, indoor_model_id, key)
     
     return {"job_id": job_id}
 

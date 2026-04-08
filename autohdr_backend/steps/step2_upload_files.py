@@ -60,28 +60,27 @@ def _read_file_binary(file_path: str) -> bytes:
         return f.read()
 
 
+import time
+
 def _upload_single_file(
     client: HttpClient,
     presigned_url: PresignedUrl,
     file_data: bytes,
+    max_retries: int = 3
 ) -> bool:
     """
-    Upload a single file to S3 using a presigned URL.
-
-    Args:
-        client: HTTP client instance.
-        presigned_url: PresignedUrl object with filename and url.
-        file_data: Binary content of the file.
-
-    Returns:
-        True if upload succeeded (status 200), False otherwise.
+    Upload a single file to S3 using a presigned URL with retries.
     """
-    try:
-        response = client.put_binary(presigned_url.url, data=file_data)
-        return response.status_code == 200
-    except Exception:
-        return False
-
+    for attempt in range(max_retries):
+        try:
+            response = client.put_binary(presigned_url.url, data=file_data)
+            if response.status_code == 200:
+                return True
+            log(logger, "WARNING", 2, f"Upload status {response.status_code}, retrying {attempt+1}/{max_retries}")
+        except Exception as e:
+            log(logger, "WARNING", 2, f"Upload exception: {e}, retrying {attempt+1}/{max_retries}")
+        time.sleep(2 * (attempt + 1))  # exponential backoff
+    return False
 
 def execute(client: HttpClient, context: PipelineContext) -> bool:
     """
@@ -121,6 +120,10 @@ def execute(client: HttpClient, context: PipelineContext) -> bool:
             all_success = False
             continue
 
+        # Add stagger to prevent throttling
+        if i > 0:
+            time.sleep(1)
+            
         success = _upload_single_file(client, presigned_url, file_data)
 
         if success:

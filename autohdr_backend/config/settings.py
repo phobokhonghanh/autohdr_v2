@@ -7,7 +7,7 @@ should exist anywhere else in the codebase.
 
 import os
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, List
 
 from dotenv import load_dotenv
 
@@ -44,6 +44,8 @@ class Settings:
     user_agent: str = ""
     proxy_http: Optional[str] = None
     proxy_https: Optional[str] = None
+    proxy_user: Optional[str] = None
+    proxy_pass: Optional[str] = None
     resources_dir: str = ""
     user_id: str = ""
     email: str = ""
@@ -76,6 +78,8 @@ class Settings:
             ),
             proxy_http=os.getenv("AUTOHDR_PROXY_HTTP"),
             proxy_https=os.getenv("AUTOHDR_PROXY_HTTPS"),
+            proxy_user=os.getenv("AUTOHDR_PROXY_USER"),
+            proxy_pass=os.getenv("AUTOHDR_PROXY_PASS"),
             resources_dir=res_dir,
             address=os.getenv("AUTOHDR_ADDRESS", ""),
             limit_count=int(os.getenv("AUTOHDR_LIMIT_COUNT", "1000")),
@@ -100,6 +104,10 @@ class Settings:
         return os.path.join(self.system_dir, "quota.json")
 
     @property
+    def keys_file(self) -> str:
+        return os.path.join(self.system_dir, "keys.json")
+
+    @property
     def sessions_file(self) -> str:
         return os.path.join(self.system_dir, "sessions.json")
 
@@ -116,18 +124,54 @@ class Settings:
         return os.path.join(self.get_user_dir(email), "logs")
 
     @property
+    def all_proxies(self) -> List[str]:
+        """
+        Load a list of proxy URLs from proxies.json.
+        Example format: ["http://proxy1", "http://proxy2"]
+        """
+        proxies_file = os.path.join(self.system_dir, "proxies.json")
+        if os.path.exists(proxies_file):
+            try:
+                import json
+                with open(proxies_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    proxies = []
+                    if isinstance(data, list):
+                        proxies = data
+                    elif isinstance(data, dict) and "http" in data:
+                        proxies = [data["http"]]
+                    
+                    # Apply authentication if provided
+                    if self.proxy_user and self.proxy_pass:
+                        auth = f"{self.proxy_user}:{self.proxy_pass}@"
+                        formatted = []
+                        for p in proxies:
+                            if not p.startswith("http"):
+                                p = f"http://{p}"
+                            
+                            if "@" not in p: # Only add if not already present
+                                parts = p.split("://", 1)
+                                p = f"{parts[0]}://{auth}{parts[1]}"
+                            formatted.append(p)
+                        return formatted
+                    return proxies
+            except Exception:
+                pass
+        return []
+
+    @property
     def proxies(self) -> Optional[dict]:
         """
-        Build proxies dict for requests library.
-
-        Returns:
-            Dictionary with http/https proxy URLs, or None if no proxies configured.
+        Legacy single proxy support from environment variables.
         """
         if not self.proxy_http and not self.proxy_https:
             return None
+            
         proxies = {}
         if self.proxy_http:
             proxies["http"] = self.proxy_http
         if self.proxy_https:
             proxies["https"] = self.proxy_https
         return proxies
+
+
