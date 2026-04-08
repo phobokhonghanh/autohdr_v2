@@ -29,6 +29,7 @@ def _build_payload(
     lastname: str,
     address: str,
     files_count: int,
+    indoor_model_id: int = 3,
 ) -> dict:
     """
     Build the request payload for associate-and-run.
@@ -40,6 +41,8 @@ def _build_payload(
         lastname: User last name.
         address: Photoshoot address.
         files_count: Number of files uploaded.
+        indoor_model_id: Model ID for processing (default 3). 
+                         Classic: 1, Lisa: 3.
 
     Returns:
         Dictionary payload matching the API specification.
@@ -52,7 +55,7 @@ def _build_payload(
         "address": address,
         "spoofId": None,
         "smartlook_url": None,
-        "indoor_model_id": 1,
+        "indoor_model_id": indoor_model_id,
         "outdoor_model_id": None,
         "files_count": files_count,
         "grass_replacement": False,
@@ -71,6 +74,7 @@ def execute(
     lastname: str,
     address: str,
     files_count: int,
+    indoor_model_id: int = 3,
 ) -> bool:
     """
     Execute Step 4: Associate files with user and trigger processing.
@@ -86,6 +90,8 @@ def execute(
         lastname: User last name.
         address: Photoshoot address.
         files_count: Number of files uploaded.
+        indoor_model_id: Model ID for processing (default 3). 
+                         Classic: 1, Lisa: 3.
 
     Returns:
         True if response.success is True, False otherwise.
@@ -93,7 +99,7 @@ def execute(
     step = 4
 
     payload = _build_payload(
-        unique_str, email, firstname, lastname, address, files_count
+        unique_str, email, firstname, lastname, address, files_count, indoor_model_id
     )
 
     try:
@@ -125,3 +131,4 @@ def execute(
         )
 
     return success
+
