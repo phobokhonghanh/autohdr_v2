@@ -13,9 +13,12 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=[],
+    excludes=[
+        'numpy', 'pandas', 'matplotlib', 'scipy', 'PyQt5', 'PyQt6', 'PySide2', 'PySide6', 
+        'openpyxl', 'sqlalchemy', 'cv2', 'pytest', 'unittest', 'pydoc', 'IPython'
+    ],
     noarchive=False,
-    optimize=0,
+    optimize=1,
 )
 pyz = PYZ(a.pure)
 
@@ -25,7 +28,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='main',
+    name='download_hdr',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
