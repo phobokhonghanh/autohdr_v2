@@ -16,6 +16,7 @@ import zipfile
 import logging
 from datetime import datetime, timedelta
 from typing import List
+from urllib.parse import quote
 
 from config.settings import Settings
 from core.logger import log
@@ -54,8 +55,9 @@ def execute(
     try:
         if len(local_paths) == 1:
             file_path = local_paths[0]
-            relative_path = os.path.relpath(file_path, "resources")
-            final_results = [f"/resources/{relative_path}"]
+            # Replace backwards slashes natively on Windows, though this is primarily posix.
+            relative_path = os.path.relpath(file_path, "resources").replace("\\", "/")
+            final_results = [f"/resources/{quote(relative_path)}"]
             log(logger, "INFO", step, f"Returning single file: {final_results[0]}")
         else:
             # Multiple files: Zip them
@@ -80,14 +82,14 @@ def execute(
                 shutil.rmtree(temp_job_dir)
                 log(logger, "INFO", step, f"Cleaned up temporary job folder: {job_id}")
 
-            relative_zip_path = os.path.relpath(zip_path, "resources")
-            final_results = [f"/resources/{relative_zip_path}"]
+            relative_zip_path = os.path.relpath(zip_path, "resources").replace("\\", "/")
+            final_results = [f"/resources/{quote(relative_zip_path)}"]
             log(logger, "INFO", step, f"Returning zip file: {final_results[0]}")
 
     except Exception as e:
         log(logger, "ERROR", step, f"Zip process failed: {e}")
         # Fallback if zip fails
-        final_results = [f"/resources/{os.path.relpath(p, 'resources')}" for p in local_paths]
+        final_results = [f"/resources/{quote(os.path.relpath(p, 'resources').replace(chr(92), '/'))}" for p in local_paths]
         log(logger, "INFO", step, f"Fallback: returning {len(final_results)} individual files")
 
     return final_results

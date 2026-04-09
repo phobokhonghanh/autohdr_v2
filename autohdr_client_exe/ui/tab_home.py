@@ -83,8 +83,17 @@ class TabHome(ctk.CTkFrame):
         self.address_entry.pack(fill="x", padx=5, pady=5)
         self.address_entry.insert(0, cache.get("address", "Demo Address"))
         
-        self.btn_process = ctk.CTkButton(self.input_frame, text="Bắt đầu xử lý (PROCESS)", command=self.start_process, fg_color="green", height=40)
-        self.btn_process.pack(pady=10)
+        # --- Action Buttons ---
+        actions_frame = ctk.CTkFrame(self.input_frame, fg_color="transparent")
+        actions_frame.pack(fill="x", pady=10)
+        
+        self.btn_process = ctk.CTkButton(actions_frame, text="Bắt đầu xử lý (PROCESS)", command=self.start_process, fg_color="green", height=40)
+        self.btn_process.pack(side="left", fill="x", expand=True, padx=5)
+        
+        self.btn_stop = ctk.CTkButton(actions_frame, text="Dừng tiến trình (STOP)", command=self.stop_process, fg_color="#c0392b", hover_color="#a93226", height=40, state="disabled")
+        self.btn_stop.pack(side="left", fill="x", expand=True, padx=5)
+        
+        self.current_job_id = None
         
     def on_drop(self, event):
         """Handle Drag and Drop event."""
@@ -185,7 +194,18 @@ class TabHome(ctk.CTkFrame):
             self.dir_entry.delete(0, "end")
             self.dir_entry.insert(0, dir_path)
             cache.set("download_dir", dir_path)
-            
+
+    def stop_process(self):
+        if not self.current_job_id:
+            return
+        
+        self.logger.write_log("WARNING", 0, f"Đang yêu cầu dừng tiến trình {self.current_job_id}...")
+        success = self.api.stop_job(self.current_job_id)
+        if success:
+            self.logger.write_log("INFO", 0, "Lệnh dừng đã được gửi.")
+        else:
+            self.logger.write_log("ERROR", 0, "Không thể gửi lệnh dừng.")
+
     def start_process(self):
         if not self.selected_files:
             self.logger.write_log("ERROR", 0, "Chưa chọn ảnh nào!")
@@ -210,6 +230,7 @@ class TabHome(ctk.CTkFrame):
         download_dir = self.dir_entry.get().strip()
         
         self.btn_process.configure(state="disabled", text="Đang gửi request...")
+        self.btn_stop.configure(state="normal")
         self.logger.write_log("INFO", 0, f"Bắt đầu upload {len(self.selected_files)} files...")
         
         threading.Thread(target=self._process_thread, args=(address, key, email, download_dir), daemon=True).start()
@@ -217,12 +238,13 @@ class TabHome(ctk.CTkFrame):
     def _process_thread(self, address, key, email, download_dir):
         try:
             job_id = self.api.process_photos(address, self.selected_files, key, email)
+            self.current_job_id = job_id
             self.logger.write_log("INFO", 0, f"Job bắt đầu: {job_id}. Đang theo dõi tiến trình...")
             self._stream_logs(job_id, download_dir)
         except Exception as e:
             self.logger.write_log("ERROR", 0, f"Lỗi Process: {e}")
             if hasattr(self, 'master'):
-                self.master.after(0, lambda: self.btn_process.configure(state="normal", text="Bắt đầu xử lý (PROCESS)"))
+                self.master.after(0, lambda: self._reset_ui())
             
     def _stream_logs(self, job_id, download_dir):
         url = f"{self.api.base_url}/api/stream/{job_id}"
@@ -248,14 +270,19 @@ class TabHome(ctk.CTkFrame):
                         self._download_files(results, download_dir, unique_str)
                         break
                     elif status == 'failed':
-                        self.logger.write_log("ERROR", 0, f"Tiến trình bị lỗi: {data.get('error')}")
+                        self.logger.write_log("ERROR", 0, f"Tiến trình dừng: {data.get('error')}")
                         break
         except Exception as e:
             self.logger.write_log("ERROR", 0, f"Mất kết nối SSE stream: {e}")
         finally:
             if response:
                 response.close()
-            self.master.after(0, lambda: self.btn_process.configure(state="normal", text="Bắt đầu xử lý (PROCESS)"))
+            self.master.after(0, lambda: self._reset_ui())
+
+    def _reset_ui(self):
+        self.btn_process.configure(state="normal", text="Bắt đầu xử lý (PROCESS)")
+        self.btn_stop.configure(state="disabled")
+        self.current_job_id = None
             
     def _append_raw_log(self, text):
         self.logger.textbox.configure(state="normal")
