@@ -110,3 +110,15 @@ class ApiClient:
                 logger.warning(f"Download attempt {attempt+1}/{max_retries} failed: {e}")
                 
         return False
+
+    def stop_job(self, job_id: str) -> bool:
+        """
+        Calls /api/stop/{job_id} to cancel a running job.
+        """
+        try:
+            res = requests.post(f"{self.base_url}/api/stop/{job_id}")
+            res.raise_for_status()
+            return True
+        except Exception as e:
+            logger.error(f"Failed to stop job {job_id}: {e}")
+            return False

@@ -184,6 +184,11 @@ def run_pipeline_task(job_id: str, file_paths: List[str], address: str, settings
     log_path = os.path.join(settings.get_user_logs_dir(user_email), f"{today}.log")
     file_handler = add_file_handler(root_logger, log_path, mode="a", job_id=job_id)
     
+    def is_cancelled():
+        return processing_jobs.get(job_id, {}).get("status") == "failed" and \
+               processing_jobs.get(job_id, {}).get("error") == "Stopped by user"
+
+    
     # Add a starting separator for this run in the file
     with open(log_path, "a", encoding="utf-8") as f:
         f.write(f"\n{'='*50}\n")
@@ -201,14 +206,10 @@ def run_pipeline_task(job_id: str, file_paths: List[str], address: str, settings
         if len(file_paths) > settings.limit_file:
              raise Exception(f"Vượt quá giới hạn số lượng file ({len(file_paths)}/{settings.limit_file})")
 
-        # Step 0 (Execute again to capture logs in this job context)
+        # Step 0
+        if is_cancelled(): return
         log(root_logger, "INFO", 0, "Init session")
-        settings = retry_with_backoff(
-            step0_session.execute, root_logger, 0, 
-            settings.retry_max_attempts, settings.retry_initial_delay, settings.retry_backoff_factor, 
-            "Retrying Step 0", True, check_stop,
-            settings, cookie, email
-        )
+        settings = retry_with_backoff(step0_session.execute, root_logger, 0, settings.retry_max_attempts, settings.retry_initial_delay, settings.retry_backoff_factor, "Retrying Step 0", True, is_cancelled, settings, cookie, email)
         if not settings or not settings.cookie: raise Exception("Step 0 failed: Not found cookie after retries")
 
         if check_stop(): raise InterruptedError()
@@ -223,33 +224,23 @@ def run_pipeline_task(job_id: str, file_paths: List[str], address: str, settings
             user_id=settings.user_id,
             auth_mode="key" if key else "quota"
         )
-        
         client = HttpClient(settings)
         
         # Step 1
+        if is_cancelled(): return
         log(root_logger, "INFO", 1, "Generate presigned URLs")
-        context = retry_with_backoff(
-            step1_presigned_urls.execute, root_logger, 1, 
-            settings.retry_max_attempts, settings.retry_initial_delay, settings.retry_backoff_factor, 
-            "Retrying Step 1", True, check_stop,
-            client, context, settings.get_user_input_dir(user_email)
-        )
+        context = retry_with_backoff(step1_presigned_urls.execute, root_logger, 1, settings.retry_max_attempts, settings.retry_initial_delay, settings.retry_backoff_factor, "Retrying Step 1", True, is_cancelled, client, context, settings.get_user_input_dir(user_email))
         if not context: raise Exception("Step 1 failed after retries")
 
         if check_stop(): raise InterruptedError()
 
         # Step 2
+        if is_cancelled(): return
         log(root_logger, "INFO", 2, "Upload files to S3")
-        if not retry_with_backoff(
-            step2_upload_files.execute, root_logger, 2, 
-            settings.retry_max_attempts, settings.retry_initial_delay, settings.retry_backoff_factor, 
-            "Retrying Step 2", True, check_stop,
-            client, context
-        ): raise Exception("Step 2 failed after retries")
+        if not retry_with_backoff(step2_upload_files.execute, root_logger, 2, settings.retry_max_attempts, settings.retry_initial_delay, settings.retry_backoff_factor, "Retrying Step 2", True, is_cancelled, client, context): raise Exception("Step 2 failed after retries")
         
-        if check_stop(): raise InterruptedError()
-
         # Step 3
+        if is_cancelled(): return
         log(root_logger, "INFO", 3, "Finalize upload")
         if not step3_finalize_upload.execute(client, context.unique_str): raise Exception("Step 3 failed")
         
@@ -258,16 +249,11 @@ def run_pipeline_task(job_id: str, file_paths: List[str], address: str, settings
             if os.path.exists(fp): 
                 try: os.remove(fp)
                 except Exception as e: pass
-        log(root_logger, "INFO", 3, "Cleaned up local temporary input files")
         
-        if check_stop(): raise InterruptedError()
-
         # Step 4
+        if is_cancelled(): return
         log(root_logger, "INFO", 4, "Run processing pipeline")
-        if not retry_with_backoff(
-            step4_associate_and_run.execute, root_logger, 4, 
-            settings.retry_max_attempts, settings.retry_initial_delay, settings.retry_backoff_factor, 
-            "Retrying Step 4", True, check_stop,
+        if not retry_with_backoff(step4_associate_and_run.execute, root_logger, 4, settings.retry_max_attempts, settings.retry_initial_delay, settings.retry_backoff_factor, "Retrying Step 4", True, is_cancelled,
             client=client, unique_str=context.unique_str, email=context.email,
             firstname=context.firstname, lastname=context.lastname,
             address=context.address, files_count=len(context.filenames),
@@ -277,27 +263,22 @@ def run_pipeline_task(job_id: str, file_paths: List[str], address: str, settings
         if check_stop(): raise InterruptedError()
 
         # Step 5
+        if is_cancelled(): return
         log(root_logger, "INFO", 5, "Poll processing status")
-        photoshoot_id = retry_with_backoff(
-            step5_poll_status.execute, root_logger, 5, 
-            settings.retry_max_attempts, settings.retry_initial_delay, settings.retry_backoff_factor, 
-            "Retrying Step 5", True, check_stop,
-            client, settings, context.unique_str, context.address
-        )
+        photoshoot_id = retry_with_backoff(step5_poll_status.execute, root_logger, 5, settings.retry_max_attempts, settings.retry_initial_delay, settings.retry_backoff_factor, "Retrying Step 5", True, is_cancelled, client, settings, context.unique_str, context.address)
         if not photoshoot_id: raise Exception("Step 5 failed after retries")
         context.photoshoot_id = photoshoot_id
         
         if check_stop(): raise InterruptedError()
 
         # Step 6
+        if is_cancelled(): return
         log(root_logger, "INFO", 6, "Get processed URLs")
-        context.processed_urls = retry_with_backoff(
-            step6_get_processed_urls.execute, root_logger, 6, 
-            settings.retry_max_attempts, settings.retry_initial_delay, settings.retry_backoff_factor, 
-            "Retrying Step 6", True, check_stop,
+        context.processed_urls = retry_with_backoff(step6_get_processed_urls.execute, root_logger, 6, settings.retry_max_attempts, settings.retry_initial_delay, settings.retry_backoff_factor, "Retrying Step 6", True, is_cancelled,
             client, context.photoshoot_id, context.unique_str, context.filenames, settings.photoshoot_page_size
         )
         if not context.processed_urls: raise Exception("Step 6 failed after retries")
+
         
         if key:
             # EXE Mode: Return direct URLs, skip server-side download
@@ -530,6 +511,22 @@ async def get_active_jobs():
 async def health_check():
     """Health check for deployment platforms."""
     return {"status": "ok", "timestamp": datetime.now().isoformat()}
+
+
+@app.post("/api/stop/{job_id}")
+async def stop_job(job_id: str):
+    """Signal a job to stop by updating its status."""
+    job = processing_jobs.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    
+    if job.get("status") in ("completed", "failed"):
+        return {"status": "already_terminal", "job_id": job_id}
+    
+    job["status"] = "failed"
+    job["error"] = "Stopped by user"
+    log(logger, "WARNING", 0, f"Nhận yêu cầu dừng Job: {job_id}")
+    return {"status": "stop_requested", "job_id": job_id}
 
 
 if __name__ == "__main__":

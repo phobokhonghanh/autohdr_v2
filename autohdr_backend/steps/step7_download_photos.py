@@ -15,7 +15,7 @@ Output:
 import os
 import logging
 from typing import List, Optional
-from urllib.parse import urlparse
+from urllib.parse import urlparse, unquote
 
 from config.settings import Settings
 from core.http_client import HttpClient
@@ -72,7 +72,7 @@ def execute(
     for i, url in enumerate(cleaned_urls):
         try:
             # Extract filename from URL
-            filename = os.path.basename(urlparse(url).path)
+            filename = unquote(os.path.basename(urlparse(url).path))
             if not filename:
                 filename = f"photo_{i}.jpg"
             
