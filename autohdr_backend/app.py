@@ -481,20 +481,6 @@ async def stream_job(job_id: str, offset: int = 0):
     )
 
 
-@app.post("/api/stop/{job_id}")
-async def stop_job(job_id: str):
-    """Request a job to stop gracefully."""
-    job = processing_jobs.get(job_id)
-    if not job:
-        raise HTTPException(status_code=404, detail="Job not found")
-    
-    # Only allow stopping if it's still active
-    if job.get("status") not in ("pending", "processing"):
-        return {"status": "ignored", "message": f"Job is already in terminal state: {job.get('status')}"}
-        
-    job["stop_requested"] = True
-    job["status"] = "stopping"
-    return {"status": "ok", "message": "Stop signal sent to pipeline"}
 
 
 @app.get("/api/jobs/active")
