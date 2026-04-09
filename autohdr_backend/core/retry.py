@@ -26,6 +26,7 @@ def retry_with_backoff(
     backoff_factor: float = 1.5,
     on_retry_message: Optional[str] = None,
     retry_if_falsy: bool = False,
+    check_stop_func: Optional[Callable[[], bool]] = None,
     *args: Any,
     **kwargs: Any,
 ) -> Optional[T]:
@@ -44,6 +45,7 @@ def retry_with_backoff(
         backoff_factor: Multiplier for delay after each retry (default: 1.5).
         on_retry_message: Optional custom message prefix for retry logs.
         retry_if_falsy: If True, treat False or None as failure and trigger retry.
+        check_stop_func: Optional callable that returns True if the process should stop.
         *args: Positional arguments passed to func.
         **kwargs: Keyword arguments passed to func.
 
@@ -54,6 +56,11 @@ def retry_with_backoff(
     last_exception = None
 
     for attempt in range(1, max_retries + 1):
+        # Check for stop signal before attempt
+        if check_stop_func and check_stop_func():
+            log(logger, "ERROR", step, "Tiến trình bị dừng bởi người dùng (Stop signal received)")
+            raise InterruptedError("Pipeline stopped by user")
+
         try:
             result = func(*args, **kwargs)
             
@@ -62,6 +69,9 @@ def retry_with_backoff(
                 raise ValueError(f"Falsy result: {result}")
                 
             return result
+        except InterruptedError:
+            # Re-raise interruption immediately
+            raise
         except Exception as e:
             last_exception = e
             minutes_approx = delay / 60
@@ -73,8 +83,16 @@ def retry_with_backoff(
                 f"{retry_msg} - Lần thử {attempt}/{max_retries}, "
                 f"đợi {delay:.0f}s (~{minutes_approx:.1f} phút) | Lỗi: {e}",
             )
+            
             if attempt < max_retries:
-                time.sleep(delay)
+                # Check for stop signal during sleep (more responsive)
+                sleep_start = time.time()
+                while time.time() - sleep_start < delay:
+                    if check_stop_func and check_stop_func():
+                        log(logger, "ERROR", step, "Tiến trình bị dừng trong khi đang đợi retry")
+                        raise InterruptedError("Pipeline stopped by user")
+                    time.sleep(1) # Check every 1 second
+                
                 delay *= backoff_factor
 
     log(
