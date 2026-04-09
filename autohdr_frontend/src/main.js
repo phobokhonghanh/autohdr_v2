@@ -72,6 +72,7 @@ document.querySelector('#app').innerHTML = `
                         <div class="log-header">
                             <h3 class="log-title">Logs</h3>
                             <div class="log-meta">
+                                <button id="stop-btn" class="btn-stop" style="display: none;">Stop</button>
                                 <button id="clear-logs-btn" class="btn-clear" title="Clear Logs">Clear</button>
                                 <span id="job-status" class="status-badge status-idle">Idle</span>
                                 <span id="job-id-display"></span>
@@ -162,10 +163,36 @@ const resultsGrid = document.getElementById("results-grid");
 const clearLogsBtn = document.getElementById("clear-logs-btn");
 const uploadForm = document.getElementById("upload-form");
 const submitBtn = document.getElementById("submit-btn");
+const stopBtn = document.getElementById("stop-btn");
 
 // --- Clear Logs ---
 clearLogsBtn.addEventListener("click", () => {
   logOutput.innerHTML = '<p class="log-placeholder">Logs cleared.</p>';
+});
+
+// --- Stop Job ---
+stopBtn.addEventListener("click", async () => {
+  const state = loadJobState();
+  if (!state || !state.jobId) return;
+
+  if (!confirm("Are you sure you want to stop the current process?")) return;
+
+  try {
+    const res = await fetch(`${API_BASE}/api/stop/${state.jobId}`, {
+      method: "POST"
+    });
+    if (res.ok) {
+      appendLogLine("<WARNING: ?: Requesting stop...>");
+      stopBtn.disabled = true;
+      stopBtn.textContent = "Stopping...";
+    } else {
+      const err = await res.json();
+      alert("Failed to stop job: " + (err.detail || "Unknown error"));
+    }
+  } catch (err) {
+    console.error("Stop job failed:", err);
+    alert("Error stopping job: " + err.message);
+  }
 });
 
 // ========================
@@ -215,6 +242,11 @@ function connectSSE(jobId, offset = 0) {
   // Disable form submission while job is active
   submitBtn.disabled = true;
   submitBtn.textContent = "Job in progress...";
+  
+  // Show stop button
+  stopBtn.style.display = "inline-block";
+  stopBtn.disabled = false;
+  stopBtn.textContent = "Stop";
 
   eventSource = new EventSource(`${API_BASE}/api/stream/${jobId}?offset=${offset}`);
 
@@ -284,6 +316,7 @@ function handleStatusChange(jobId, data) {
     statusBadge.textContent = "Completed";
     submitBtn.disabled = false;
     submitBtn.textContent = "Start Processing";
+    stopBtn.style.display = "none";
 
     // Track job completion in GA
     trackEvent('job_completed', {
@@ -312,6 +345,7 @@ function handleStatusChange(jobId, data) {
     statusBadge.textContent = "Failed";
     submitBtn.disabled = false;
     submitBtn.textContent = "Start Processing";
+    stopBtn.style.display = "none";
     clearJobState();
 
     logOutput.innerHTML += `<div class="log-line" style="color:#ef4444; margin-top: 10px; font-weight: bold;">

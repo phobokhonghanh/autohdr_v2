@@ -318,6 +318,30 @@ textarea:focus {
   color: #fff;
 }
 
+.btn-stop {
+  background: #334155;
+  color: #ef4444;
+  border: 1px solid #ef4444;
+  padding: 0.2rem 0.6rem;
+  border-radius: 4px;
+  font-size: 0.65rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-stop:hover {
+  background: #ef4444;
+  color: #fff;
+}
+
+.btn-stop:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  border-color: #334155;
+  color: #cbd5e1;
+}
+
 .btn-retry {
   background: var(--error);
   color: white;
