@@ -1,27 +1,25 @@
 name: Build Windows EXE
 
-# Hành động này tự động chạy khi bạn có thay đổi code và đẩy (push) lên GitHub 
-# ở các branch: 'main' hoặc các nhánh bắt đầu bằng 'deploy/'
-# Ngoài ra bạn cũng có thể tự qua trang Github Action tự bấm chạy (workflow_dispatch)
 on:
   push:
     branches: [ "main", "deploy/*" ]
     paths:
       - 'autohdr_client_exe/**'
+      - 'autohdr_client_exe_v2/**'
   workflow_dispatch:
 
 jobs:
-  build:
+  # job build cho bản V1
+  build_v1:
     runs-on: windows-latest
-
     steps:
     - name: Tải Code vào môi trường Build
       uses: actions/checkout@v4
 
-    - name: Cài đặt Python trên Windows Ảo
+    - name: Cài đặt Python 3.10
       uses: actions/setup-python@v5
       with:
-        python-version: '3.10' # Ổn định và tương thích tốt nhất
+        python-version: '3.10'
 
     - name: Cài đặt Thư viện và PyInstaller
       run: |
@@ -34,9 +32,39 @@ jobs:
       run: |
         pyinstaller main.spec --clean
 
-    - name: Lưu trữ và gửi file cài đặt về cho bạn
+    - name: Lưu trữ và gửi file cài đặt v1
       uses: actions/upload-artifact@v4
       with:
-        name: Autohdr-Client-Windows-EXE
-        path: autohdr_client_exe/dist/download_hdr.exe
-        retention-days: 30 # Lưu trữ file trên nhánh Github của bạn trong 30 ngày
+        name: AutoHDR_v1
+        path: autohdr_client_exe/dist/AutoHDR_v1.exe
+        retention-days: 7
+
+  # job build cho bản V2
+  build_v2:
+    runs-on: windows-latest
+    steps:
+    - name: Tải Code vào môi trường Build
+      uses: actions/checkout@v4
+
+    - name: Cài đặt Python 3.12
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Cài đặt Thư viện và PyInstaller
+      run: |
+        python -m pip install --upgrade pip
+        pip install pyinstaller
+        pip install -r autohdr_client_exe_v2/requirements.txt
+
+    - name: Đóng gói thành file chạy (.exe)
+      working-directory: ./autohdr_client_exe_v2
+      run: |
+        pyinstaller main.spec --clean
+
+    - name: Lưu trữ và gửi file cài đặt v2
+      uses: actions/upload-artifact@v4
+      with:
+        name: AutoHDR_v2
+        path: autohdr_client_exe_v2/dist/AutoHDR_v2.exe
+        retention-days: 7
