@@ -47,8 +47,8 @@ def execute(
     unique_str: str,
     address: str,
     max_retries: int = 20,
-    initial_delay: float = 15.0,
-    backoff_factor: float = 1.5,
+    initial_delay: float = 60.0,
+    backoff_factor: float = 1.2,
     photoshoot_limit: int = 20,
     check_cancelled: Optional[Callable] = None,
     on_log: Optional[Callable] = None,
@@ -119,6 +119,8 @@ def execute(
                         return None
                     time.sleep(1)
                 delay *= backoff_factor
+                if delay > 200:
+                    delay = 120
             else:
                 _log("ERROR", "Server quá tải, hãy thử lại sau.")
                 return None
