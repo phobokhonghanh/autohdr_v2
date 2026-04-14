@@ -33,7 +33,7 @@ def _build_payload(
         "outdoor_model_id": None,
         "files_count": files_count,
         "grass_replacement": False,
-        "perspective_correction": True,
+        "perspective_correction": False,
         "special_attention": False,
         "declutter": False,
         "photoshoot_id": None,

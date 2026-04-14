@@ -46,7 +46,7 @@ def execute(
     user_id: str,
     unique_str: str,
     address: str,
-    max_retries: int = 10,
+    max_retries: int = 20,
     initial_delay: float = 15.0,
     backoff_factor: float = 1.5,
     photoshoot_limit: int = 20,
