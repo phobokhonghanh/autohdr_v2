@@ -9,6 +9,7 @@ import customtkinter as ctk
 from core.api_client import ApiClient
 from core.cache import cache
 from core.utils import get_hwid
+import webbrowser
 
 
 class ScreenKey(ctk.CTkFrame):
@@ -84,6 +85,17 @@ class ScreenKey(ctk.CTkFrame):
             text_color="gray",
         )
         self.status_label.pack(pady=5)
+
+        # Footer Link: by tuitenPhở
+        footer_label = ctk.CTkLabel(
+            self,
+            text="Created by 'tuitenPhở'",
+            text_color="#22C55E",  # Green
+            font=ctk.CTkFont(family="Arial", size=13, weight="bold", slant="italic"),
+            cursor="hand2"
+        )
+        footer_label.place(relx=0.98, rely=0.97, anchor="se")
+        footer_label.bind("<Button-1>", lambda e: webbrowser.open("https://www.facebook.com/nguyennef.ndn"))
 
     def check_key(self):
         key = self.key_entry.get().strip()
