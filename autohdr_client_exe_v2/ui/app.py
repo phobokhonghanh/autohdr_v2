@@ -17,7 +17,7 @@ class App(ctk.CTk):
         # Initialize Drag and Drop
         self.TkdndVersion = TkinterDnD._require(self)
 
-        self.title("AutoHDR - Desktop Client v2 (Local Pipeline)")
+        self.title("AutoHDR - v2")
         self.geometry("1280×800")
         self.minsize(1000, 700)
 

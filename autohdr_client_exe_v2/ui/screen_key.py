@@ -28,7 +28,7 @@ class ScreenKey(ctk.CTkFrame):
         # Title
         ctk.CTkLabel(
             center_frame,
-            text="🔐 AutoHDR - Kích Hoạt Key",
+            text="AutoHDR - v2",
             font=("Arial", 28, "bold"),
         ).pack(pady=(0, 30))
 
@@ -51,7 +51,7 @@ class ScreenKey(ctk.CTkFrame):
 
         self.key_entry = ctk.CTkEntry(
             center_frame,
-            placeholder_text="Nhập API Key của bạn...",
+            placeholder_text="Nhập Key của bạn...",
             width=400,
             height=50,
             font=("Arial", 16),
@@ -88,26 +88,26 @@ class ScreenKey(ctk.CTkFrame):
     def check_key(self):
         key = self.key_entry.get().strip()
         if not key:
-            self.status_label.configure(text="⚠️ Vui lòng nhập Key", text_color="#EF4444")
+            self.status_label.configure(text="Vui lòng nhập Key", text_color="#EF4444")
             return
 
-        self.status_label.configure(text="⏳ Đang kết nối server...", text_color="#3B82F6")
+        self.status_label.configure(text="Đang kết nối server...", text_color="#3B82F6")
         self.btn_check.configure(state="disabled", text="Đang kiểm tra...")
         self.update()
 
         try:
             is_valid = self.api.check_key(key, self.hwid)
             if is_valid:
-                self.status_label.configure(text="✅ Kích hoạt thành công!", text_color="#22C55E")
+                self.status_label.configure(text="Kích hoạt thành công!", text_color="#22C55E")
                 cache.set("active_key", key)
                 self.update()
                 self.after(800, lambda: self.app.show_main_screen())
             else:
                 self.status_label.configure(
-                    text="❌ Key không hợp lệ, hết hạn hoặc đã dùng trên máy khác",
+                    text="Key không hợp lệ, hết hạn hoặc đã dùng trên máy khác",
                     text_color="#EF4444",
                 )
                 self.btn_check.configure(state="normal", text="Kiểm Tra & Kích Hoạt")
         except Exception as e:
-            self.status_label.configure(text=f"❌ Lỗi: {str(e)}", text_color="#EF4444")
+            self.status_label.configure(text=f"Lỗi: {str(e)}", text_color="#EF4444")
             self.btn_check.configure(state="normal", text="Kiểm Tra & Kích Hoạt")

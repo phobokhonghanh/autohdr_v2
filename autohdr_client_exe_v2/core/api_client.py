@@ -42,7 +42,7 @@ class ApiClient:
         except requests.exceptions.ConnectionError:
             logger.error("Không thể kết nối đến server. Kiểm tra kết nối mạng.")
         except requests.exceptions.Timeout:
-            logger.error("Server không phản hồi (timeout).")
+            logger.error("Server không phản hồi.")
         except Exception as e:
             logger.error(f"Lỗi kiểm tra key: {e}")
 

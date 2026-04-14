@@ -251,6 +251,20 @@ class ScreenMain(ctk.CTkFrame):
         self.address_entry.pack(side="left", fill="x", expand=True, padx=2)
         self.address_entry.insert(0, cache.get("address", "Demo Project"))
 
+        mode_frame = ctk.CTkFrame(controls_left, fg_color="transparent")
+        mode_frame.pack(fill="x", pady=(0, 8))
+        ctk.CTkLabel(mode_frame, text="Mode:", font=("Arial", 13)).pack(side="left", padx=2)
+        
+        self.mode_var = ctk.StringVar(value=cache.get("mode", "Lisa"))
+        self.mode_selector = ctk.CTkSegmentedButton(
+            mode_frame, 
+            values=["Classic", "Lisa"],
+            variable=self.mode_var,
+            command=lambda v: cache.set("mode", v),
+            height=30
+        )
+        self.mode_selector.pack(side="left", fill="x", expand=True, padx=2)
+
         # --- RIGHT: Proxy Settings ---
         proxy_row1 = ctk.CTkFrame(controls_right, fg_color="transparent")
         proxy_row1.pack(fill="x", pady=2)
@@ -384,7 +398,7 @@ class ScreenMain(ctk.CTkFrame):
         cached_email = cache.get("email")
 
         if not cookie and not cached_email:
-            self.after(0, lambda: self.email_label.configure(text="❌ Nhập cookie", text_color="#EF4444"))
+            self.after(0, lambda: self.email_label.configure(text="Nhập cookie", text_color="#EF4444"))
             return
 
         try:
@@ -398,7 +412,7 @@ class ScreenMain(ctk.CTkFrame):
             if session:
                 self.current_session = session
                 self.after(0, lambda: self.email_label.configure(
-                    text=f"✅ {session.email}", text_color="#22C55E"))
+                    text=f"{session.email}", text_color="#22C55E"))
                 cache.set("email", session.email)
                 cache.set("cookie", session.cookie)
                 cache.set("user_id", session.user_id)
@@ -407,10 +421,10 @@ class ScreenMain(ctk.CTkFrame):
                 cache.set("expires", session.expires)
             else:
                 self.after(0, lambda: self.email_label.configure(
-                    text="❌ Cookie lỗi", text_color="#EF4444"))
+                    text="Cookie lỗi", text_color="#EF4444"))
         except Exception as e:
             self.after(0, lambda: self.email_label.configure(
-                text=f"❌ Lỗi: {str(e)[:30]}", text_color="#EF4444"))
+                text=f"Lỗi: {str(e)[:30]}", text_color="#EF4444"))
 
     # ==================================================
     # File Selection & Drag-Drop
@@ -569,19 +583,19 @@ class ScreenMain(ctk.CTkFrame):
         password = self.proxy_pass_entry.get().strip()
 
         if not ip or not port:
-            self.proxy_status_label.configure(text="⚪ Không sử dụng", text_color="gray")
+            self.proxy_status_label.configure(text="Không sử dụng", text_color="gray")
             return
 
-        self.proxy_status_label.configure(text="⏳ Đang test...", text_color="#F59E0B")
+        self.proxy_status_label.configure(text="Đang test...", text_color="#F59E0B")
 
         def _do_test():
             success, message = HttpClient.validate_proxy(ip, port, user, password)
             if success:
                 self.after(0, lambda: self.proxy_status_label.configure(
-                    text=f"✅ {message}", text_color="#22C55E"))
+                    text=f"{message}", text_color="#22C55E"))
             else:
                 self.after(0, lambda: self.proxy_status_label.configure(
-                    text=f"❌ {message}", text_color="#EF4444"))
+                    text=f"{message}", text_color="#EF4444"))
 
         thread = threading.Thread(target=_do_test, daemon=True)
         thread.start()
@@ -596,12 +610,17 @@ class ScreenMain(ctk.CTkFrame):
         # Get proxy config
         proxy_config = self._get_proxy_config()
 
+        # Get indoor_model_id from mode selection
+        mode = self.mode_var.get()
+        indoor_model_id = 1 if mode == "Classic" else 3
+
         # Create job
         job = self.pipeline_mgr.create_job(
             session=self.current_session,
             file_paths=self.selected_files.copy(),
             address=address,
             download_dir=download_dir,
+            indoor_model_id=indoor_model_id,
             on_log=lambda jid, msg: self.after(0, lambda j=jid, m=msg: self._on_job_log(j, m)),
             on_job_update=lambda j: self.after(0, lambda: self._refresh_job_list()),
             proxy_config=proxy_config,
@@ -644,7 +663,7 @@ class ScreenMain(ctk.CTkFrame):
 
         status_label = ctk.CTkLabel(
             info_frame,
-            text=f"📷 {job.file_count} ảnh | ⏳ Đang xử lý...",
+            text=f"{job.file_count} ảnh | Đang xử lý...",
             font=("Arial", 14),
             text_color="#9CA3AF",
         )
@@ -694,7 +713,7 @@ class ScreenMain(ctk.CTkFrame):
         job = self.pipeline_mgr.get_job(job_id)
         if job:
             status_emoji = {"processing": "⏳", "completed": "✅", "failed": "❌", "stopped": "⏹"}.get(job.status, "")
-            self.log_title_label.configure(text=f"📝 Log: Job {job_id} {status_emoji}")
+            self.log_title_label.configure(text=f"Log: Job {job_id} {status_emoji}")
 
         # Load logs for this job
         self._display_job_logs(job_id)
@@ -742,7 +761,7 @@ class ScreenMain(ctk.CTkFrame):
 
                 if job.status == "completed":
                     widget.status_label.configure(
-                        text=f"📷 {job.file_count} ảnh | ✅ Hoàn thành ({job.downloaded_count} đã tải)",
+                        text=f"{job.file_count} ảnh | Hoàn thành ({job.downloaded_count} đã tải)",
                         text_color="#22C55E",
                         font=("Arial", 14, "bold")
                     )
@@ -756,27 +775,27 @@ class ScreenMain(ctk.CTkFrame):
                     self._play_notification_sound()
                     # Update log title if this job is selected
                     if jid == self.selected_job_id:
-                        self.log_title_label.configure(text=f"📝 Log: Job {jid} ✅")
+                        self.log_title_label.configure(text=f"Log: Job {jid} ✅")
 
                 elif job.status == "failed":
                     widget.status_label.configure(
-                        text=f"📷 {job.file_count} ảnh | ❌ Lỗi: {job.error[:40]}",
+                        text=f"{job.file_count} ảnh | Lỗi: {job.error[:40]}",
                         text_color="#EF4444",
                     )
                     if hasattr(widget, 'stop_btn'):
                         widget.stop_btn.pack_forget()
                     if jid == self.selected_job_id:
-                        self.log_title_label.configure(text=f"📝 Log: Job {jid} ❌")
+                        self.log_title_label.configure(text=f"Log: Job {jid} ❌")
 
                 elif job.status == "stopped":
                     widget.status_label.configure(
-                        text=f"📷 {job.file_count} ảnh | ⏹ Đã dừng",
+                        text=f"{job.file_count} ảnh | Đã dừng",
                         text_color="#F59E0B",
                     )
                     if hasattr(widget, 'stop_btn'):
                         widget.stop_btn.pack_forget()
                     if jid == self.selected_job_id:
-                        self.log_title_label.configure(text=f"📝 Log: Job {jid} ⏹")
+                        self.log_title_label.configure(text=f"Log: Job {jid} ⏹")
             except Exception:
                 pass
 
