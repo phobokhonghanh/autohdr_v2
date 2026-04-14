@@ -35,9 +35,10 @@
 
             <div class="form-group">
               <label>Thời hạn sử dụng</label>
-              <div style="display: flex; gap: 1.5rem; margin-top: 0.5rem;">
+              <div style="display: flex; gap: 1.5rem; margin-top: 0.5rem; align-items: center;">
                 <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
-                  <input type="radio" name="expiry" value="30" checked> 30 Ngày
+                  <input type="radio" name="expiry" value="days" checked> 
+                  <input type="number" id="expiry-days-input" value="30" min="1" max="9999" style="width: 70px; padding: 0.3rem;" /> Ngày
                 </label>
                 <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
                   <input type="radio" name="expiry" value="forever"> Vĩnh viễn
@@ -61,9 +62,14 @@
       <!-- Cột bên phải: Danh sách Key -->
       <div class="split-right">
         <div class="card">
-          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; gap: 0.5rem;">
             <h3>Danh sách Keys hiện có</h3>
-            <button id="btn-list" class="btn-clear">Làm mới danh sách</button>
+            <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
+              <button id="btn-export" class="btn-clear" style="padding: 0.4rem 0.8rem; border: 1px solid var(--border);">Export JSON</button>
+              <label for="import-file" class="btn-clear" style="cursor: pointer; padding: 0.4rem 0.8rem; border: 1px solid var(--border); margin: 0;">Import JSON</label>
+              <input type="file" id="import-file" accept=".json" style="display: none;" />
+              <button id="btn-list" class="btn-primary" style="padding: 0.4rem 0.8rem;">Làm mới</button>
+            </div>
           </div>
           
           <div id="keys-table-container" style="overflow-x: auto;">
@@ -74,12 +80,13 @@
                    <th style="padding: 0.5rem;">Key</th>
                    <th style="padding: 0.5rem;">Hạn dùng</th>
                    <th style="padding: 0.5rem;">Máy khóa</th>
+                   <th style="padding: 0.5rem; text-align: center;">Hành động</th>
                  </tr>
                </thead>
                <tbody id="keys-body">
                  <!-- Dữ liệu sẽ được chèn vào đây -->
                  <tr>
-                   <td colspan="4" style="text-align: center; padding: 2rem; color: var(--text-light);">
+                   <td colspan="5" style="text-align: center; padding: 2rem; color: var(--text-light);">
                      Nhập mật khẩu bên trái và bấm "Làm mới" để xem danh sách.
                    </td>
                  </tr>
