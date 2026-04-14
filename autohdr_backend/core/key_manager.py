@@ -91,3 +91,43 @@ def add_or_update_key_by_name(keys_file: str, name: str, expires_at: Optional[st
     records.append(new_record)
     save_keys(keys_file, records)
     return new_record, "new"
+
+def delete_key(keys_file: str, key_to_delete: str) -> bool:
+    """Delete a key by its name or key value.
+    Returns True if deleted, False if not found.
+    """
+    records = load_keys(keys_file)
+    original_count = len(records)
+    records = [r for r in records if r.key != key_to_delete and r.name != key_to_delete]
+    
+    if len(records) < original_count:
+        save_keys(keys_file, records)
+        return True
+    return False
+
+def import_keys(keys_file: str, new_keys_data: list) -> int:
+    """Import valid keys from JSON array, skipping existing records by name.
+    Targeting uniqueness by 'name' as requested.
+    Returns the number of keys successfully imported.
+    """
+    records = load_keys(keys_file)
+    existing_names = {r.name for r in records if r.name}
+    
+    imported_count = 0
+    for item in new_keys_data:
+        try:
+            if not isinstance(item, dict):
+                continue
+            new_record = KeyRecord.from_dict(item)
+            if new_record.name and new_record.name not in existing_names:
+                records.append(new_record)
+                existing_names.add(new_record.name)
+                imported_count += 1
+        except Exception as e:
+            logger.warning(f"Failed to import key item {item}: {e}")
+            continue
+            
+    if imported_count > 0:
+        save_keys(keys_file, records)
+        
+    return imported_count
