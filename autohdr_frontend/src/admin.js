@@ -29,7 +29,7 @@ function showToast(message, isError = false) {
 async function loadKeys() {
     const password = adminPassInput.value;
     if (!password) {
-        showToast("Vui lòng nhập mật khẩu Admin!");
+        showToast("Vui lòng nhập mật khẩu!");
         return;
     }
 
@@ -64,7 +64,7 @@ function renderKeys(keys) {
     keysBody.innerHTML = keys.map(k => {
         const expires = k.expires_at ? new Date(k.expires_at).toLocaleDateString('vi-VN') : 'Vĩnh viễn';
         const machine = k.machine_id ? `<span style="font-size: 0.7rem; color: var(--text-light);">${k.machine_id.substring(0, 15)}...</span>` : '<span style="color: var(--text-light);">Chưa dùng</span>';
-        
+
         return `
             <tr style="border-bottom: 1px solid var(--border);">
                 <td style="padding: 0.75rem;">${k.name}</td>
@@ -91,10 +91,10 @@ function renderKeys(keys) {
 async function deleteKey(key) {
     const password = adminPassInput.value;
     if (!password) {
-        showToast("Vui lòng nhập mật khẩu Admin!");
+        showToast("Vui lòng nhập mật khẩu!");
         return;
     }
-    
+
     try {
         const response = await fetch(`${API_BASE}/api/admin/keys/delete`, {
             method: 'POST',
@@ -119,11 +119,11 @@ async function deleteKey(key) {
  */
 keyForm.addEventListener('submit', async (e) => {
     e.preventDefault();
-    
+
     const password = adminPassInput.value;
     const name = keyNameInput.value;
     const expiryType = document.querySelector('input[name="expiry"]:checked').value;
-    
+
     let days = null;
     if (expiryType === 'days') {
         const daysInput = document.getElementById('expiry-days-input').value;
@@ -133,7 +133,7 @@ keyForm.addEventListener('submit', async (e) => {
             return;
         }
     }
-    
+
     const payload = {
         password,
         name,
@@ -163,15 +163,15 @@ keyForm.addEventListener('submit', async (e) => {
         displayKey.innerText = record.key;
         resultDiv.style.display = 'block';
         showToast("Tạo Key thành công!");
-        
+
         // Cập nhật lại danh sách
         loadKeys();
-        
+
     } catch (error) {
         showToast(error.message, true);
     } finally {
         btnCreate.disabled = false;
-        btnCreate.innerText = "Tạo License Key";
+        btnCreate.innerText = "Tạo";
     }
 });
 
@@ -180,23 +180,23 @@ btnList.addEventListener('click', loadKeys);
 btnExport.addEventListener('click', async () => {
     const password = adminPassInput.value;
     if (!password) {
-        showToast("Vui lòng nhập mật khẩu Admin để tải keys!");
+        showToast("Vui lòng nhập mật khẩu để tải keys!");
         return;
     }
-    
+
     try {
         const response = await fetch(`${API_BASE}/api/admin/keys/export`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ password })
         });
-        
+
         if (!response.ok) {
             let errorMsg = "Lấy file thất bại";
-            try { const err = await response.json(); errorMsg = err.detail || errorMsg; } catch(e) {}
+            try { const err = await response.json(); errorMsg = err.detail || errorMsg; } catch (e) { }
             throw new Error(errorMsg);
         }
-        
+
         const blob = await response.blob();
         const url = window.URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -214,29 +214,29 @@ btnExport.addEventListener('click', async () => {
 inputImport.addEventListener('change', async (e) => {
     const file = e.target.files[0];
     if (!file) return;
-    
+
     const password = adminPassInput.value;
     if (!password) {
-        showToast("Vui lòng nhập mật khẩu Admin để import keys!");
+        showToast("Vui lòng nhập mật khẩu để import keys!");
         e.target.value = ''; // reset
         return;
     }
-    
+
     const formData = new FormData();
     formData.append("password", password);
     formData.append("file", file);
-    
+
     try {
         const response = await fetch(`${API_BASE}/api/admin/keys/import`, {
             method: 'POST',
             body: formData
         });
-        
+
         if (!response.ok) {
             const err = await response.json();
             throw new Error(err.detail || "Không thể import Key");
         }
-        
+
         const data = await response.json();
         showToast(data.message || "Import thành công!");
         loadKeys();
