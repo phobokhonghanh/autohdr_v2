@@ -12,7 +12,7 @@ export default defineConfig({
         // Optimize chunk size
         rollupOptions: {
             input: {
-                main: 'index.html',
+                // main: 'index.html',
                 admin: 'admin.html',
             },
             output: {
