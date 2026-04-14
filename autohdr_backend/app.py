@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 import zipfile
 from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -129,6 +129,13 @@ class AdminKeyAddRequest(BaseModel):
     days: Optional[int] = 30
     forever: Optional[bool] = False
 
+class AdminKeyDeleteRequest(BaseModel):
+    password: str
+    key: str
+
+class AdminKeyExportRequest(BaseModel):
+    password: str
+
 @app.post("/api/admin/keys/list")
 async def admin_list_keys(req: AdminKeyListRequest):
     """List all keys (Admin only)."""
@@ -161,6 +168,57 @@ async def admin_add_key(req: AdminKeyAddRequest):
         "record": record.to_dict()
     }
 
+
+@app.post("/api/admin/keys/delete")
+async def admin_delete_key(req: AdminKeyDeleteRequest):
+    """Delete a key (Admin only)."""
+    settings = Settings.from_env()
+    if req.password != settings.proxy_pass:
+        raise HTTPException(status_code=401, detail="Unauthorized: Invalid admin password")
+    
+    from core import key_manager
+    success = key_manager.delete_key(settings.keys_file, req.key)
+    if success:
+        return {"status": "ok", "message": "Key deleted successfully"}
+    else:
+        raise HTTPException(status_code=404, detail="Key not found")
+
+@app.post("/api/admin/keys/import")
+async def admin_import_keys(password: str = Form(...), file: UploadFile = File(...)):
+    """Import keys from JSON file (Admin only)."""
+    settings = Settings.from_env()
+    if password != settings.proxy_pass:
+        raise HTTPException(status_code=401, detail="Unauthorized: Invalid admin password")
+        
+    from core import key_manager
+    try:
+        content = await file.read()
+        data = json.loads(content.decode("utf-8"))
+        if not isinstance(data, list):
+            raise HTTPException(status_code=400, detail="Invalid JSON format: Expected a list of key records")
+            
+        imported = key_manager.import_keys(settings.keys_file, data)
+        return {"status": "ok", "message": f"Successfully imported {imported} new keys"}
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid JSON format")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Import failed: {str(e)}")
+
+@app.post("/api/admin/keys/export")
+async def admin_export_keys(req: AdminKeyExportRequest):
+    """Export keys as JSON file (Admin only)."""
+    settings = Settings.from_env()
+    if req.password != settings.proxy_pass:
+        raise HTTPException(status_code=401, detail="Unauthorized: Invalid admin password")
+        
+    if not os.path.exists(settings.keys_file):
+        raise HTTPException(status_code=404, detail="Keys file not found")
+        
+    return FileResponse(
+        path=settings.keys_file,
+        media_type="application/json",
+        filename="keys_export.json"
+    )
 
 def run_pipeline_task(job_id: str, file_paths: List[str], address: str, settings: Settings, cookie: Optional[str], email: Optional[str], indoor_model_id: int = 3, key: Optional[str] = None):
     """Background task to run the full pipeline and capture logs in a thread."""
