@@ -42,6 +42,13 @@ def get_logs_dir() -> str:
     return logs_dir
 
 
+def get_checkpoints_dir() -> str:
+    """Get the checkpoints directory inside app data."""
+    checkpoints_dir = os.path.join(get_app_data_dir(), "checkpoints")
+    os.makedirs(checkpoints_dir, exist_ok=True)
+    return checkpoints_dir
+
+
 def get_sessions_dir() -> str:
     """Get the sessions directory inside app data."""
     sessions_dir = os.path.join(get_app_data_dir(), "sessions")

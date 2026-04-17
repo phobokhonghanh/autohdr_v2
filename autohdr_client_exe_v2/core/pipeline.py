@@ -13,12 +13,14 @@ import uuid
 import logging
 import threading
 import datetime
+import json
 from typing import List, Optional, Callable
 from dataclasses import dataclass, field
 
 from core.http_client import HttpClient
 from core.logger import log, setup_logger, setup_job_logger, get_job_log_path
 from core.cache import cache
+from core.utils import get_checkpoints_dir
 from models.schemas import PipelineContext, SessionRecord
 from steps import (
     step0_session,
@@ -83,6 +85,7 @@ class PipelineManager:
         on_log: Optional[Callable[[str, str], None]] = None,
         on_job_update: Optional[Callable[["Job"], None]] = None,
         proxy_config: Optional[dict] = None,
+        outdoor_model_id: Optional[int] = None,
     ) -> Job:
         """Create and start a new pipeline job."""
         job_id = str(uuid.uuid4())[:8]
@@ -102,10 +105,97 @@ class PipelineManager:
         thread = threading.Thread(
             target=self._run_pipeline,
             args=(job, session, file_paths, address, download_dir, indoor_model_id, proxy_config),
+            kwargs={"outdoor_model_id": outdoor_model_id},
             daemon=True,
         )
         thread.start()
         return job
+
+    def resume_job(
+        self,
+        checkpoint_id: str,
+        on_log: Optional[Callable[[str, str], None]] = None,
+        on_job_update: Optional[Callable[["Job"], None]] = None,
+    ) -> Optional[Job]:
+        """Resume a job from a checkpoint file."""
+        checkpoint_path = os.path.join(get_checkpoints_dir(), f"{checkpoint_id}.json")
+        if not os.path.exists(checkpoint_path):
+            return None
+
+        try:
+            with open(checkpoint_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            cookie = data.get("cookies")
+            user_id = data.get("user_id")
+            unique_str = data.get("unique_str")
+            address = data.get("address")
+            download_dir = data.get("download_dir")
+            proxy_config = data.get("proxy_config")
+
+            # Reconstruct session
+            session = SessionRecord(
+                cookie=cookie,
+                user_id=user_id,
+                email="", # Not strictly needed for steps 5-7
+                firstname="",
+                lastname="",
+                expires="" # Session is assumed valid for the retry
+            )
+
+            # Reconstruct context
+            context = PipelineContext(
+                file_paths=[],
+                address=address,
+                email="",
+                firstname="",
+                lastname="",
+                user_id=user_id,
+                unique_str=unique_str
+            )
+
+            job = Job(
+                job_id=checkpoint_id,
+                address=context.address,
+                file_count=0, # Reset count as files are already uploaded
+            )
+
+            # Load existing logs from file to show in UI
+            log_path = get_job_log_path(checkpoint_id)
+            if os.path.exists(log_path):
+                try:
+                    with open(log_path, "r", encoding="utf-8") as lf:
+                        # Keep only the last MAX_LOG_LINES
+                        lines = lf.readlines()[-MAX_LOG_LINES:]
+                        job.log_lines = [line.strip() for line in lines]
+                except Exception:
+                    pass
+
+            job.log_lines.append("-" * 40)
+            job.log_lines.append(f"RESTARTING JOB: {checkpoint_id}")
+            job.log_lines.append(f"Project: {address}")
+            job.log_lines.append(f"DownloadDir: {download_dir}")
+            job.log_lines.append(f"UniqueStr: {unique_str}")
+            job.log_lines.append("-" * 40)
+
+            with self._lock:
+                self.jobs[job.job_id] = job
+                self._callbacks[job.job_id] = {
+                    "on_log": on_log,
+                    "on_job_update": on_job_update
+                }
+
+            thread = threading.Thread(
+                target=self._run_pipeline,
+                args=(job, session, [], address, download_dir, 3, proxy_config, context),
+                kwargs={"start_step": 5},
+                daemon=True,
+            )
+            thread.start()
+            return job
+        except Exception as e:
+            logger.error(f"Lỗi khi resume job từ checkpoint {checkpoint_id}: {e}")
+            return None
 
     def stop_job(self, job_id: str) -> bool:
         """Request a job to stop."""
@@ -143,6 +233,50 @@ class PipelineManager:
             return list(job.log_lines)
         return []
 
+    def get_available_checkpoint_ids(self) -> List[str]:
+        """Get list of IDs that have available checkpoints."""
+        ids = []
+        cp_dir = get_checkpoints_dir()
+        if os.path.exists(cp_dir):
+            for f in os.listdir(cp_dir):
+                if f.endswith(".json"):
+                    ids.append(f[:-5])
+        return ids
+    def load_recoverable_jobs(self) -> List["Job"]:
+        """Scan checkpoints and load jobs that are not already in memory."""
+        new_jobs = []
+        cp_dir = get_checkpoints_dir()
+        if not os.path.exists(cp_dir):
+            return []
+
+        for f in os.listdir(cp_dir):
+            if f.endswith(".json"):
+                job_id = f[:-5]
+                with self._lock:
+                    if job_id in self.jobs:
+                        continue
+
+                try:
+                    cp_path = os.path.join(cp_dir, f)
+                    with open(cp_path, "r", encoding="utf-8") as jf:
+                        data = json.load(jf)
+                    
+                    address = data.get("address", "Khôi phục từ checkpoint")
+                    job = Job(
+                        job_id=job_id,
+                        address=address,
+                        file_count=0, # Số lượng ảnh sẽ được cập nhật khi Resume
+                        status="failed" # Set as failed so UI shows Restart button
+                    )
+                    job.error = "Có thể khôi phục"
+                    
+                    with self._lock:
+                        self.jobs[job_id] = job
+                    new_jobs.append(job)
+                except Exception:
+                    continue
+        return new_jobs
+
     def _run_pipeline(
         self,
         job: Job,
@@ -152,6 +286,9 @@ class PipelineManager:
         download_dir: str,
         indoor_model_id: int,
         proxy_config: Optional[dict] = None,
+        context: Optional[PipelineContext] = None,
+        start_step: int = 1,
+        outdoor_model_id: Optional[int] = None,
     ):
         """Execute the full pipeline (Steps 1-7) for a job."""
         job.status = "processing"
@@ -197,57 +334,93 @@ class PipelineManager:
                     password=proxy_config.get("password", ""),
                 )
 
-            # Build pipeline context
-            context = PipelineContext(
-                file_paths=file_paths,
-                address=address,
-                email=session.email,
-                firstname=session.firstname,
-                lastname=session.lastname,
-                user_id=session.user_id,
-            )
+            # Build pipeline context if not provided
+            if context is None:
+                context = PipelineContext(
+                    file_paths=file_paths,
+                    address=address,
+                    email=session.email,
+                    firstname=session.firstname,
+                    lastname=session.lastname,
+                    user_id=session.user_id,
+                )
+
+            # Checkpoint management
+            can_checkpoint = False
+
+            def _save_checkpoint():
+                try:
+                    cp_path = os.path.join(get_checkpoints_dir(), f"{job.job_id}.json")
+                    cp_data = {
+                        "unique_str": context.unique_str,
+                        "address": context.address,
+                        "user_id": context.user_id,
+                        "cookies": session.cookie,
+                        "download_dir": download_dir,
+                        "proxy_config": proxy_config,
+                        "timestamp": datetime.datetime.now().isoformat()
+                    }
+                    with open(cp_path, "w", encoding="utf-8") as f:
+                        json.dump(cp_data, f, ensure_ascii=False, indent=2)
+                    _log("INFO", 0, f"Đã lưu checkpoint")
+                except Exception as ex:
+                    _log("ERROR", 0, f"Lỗi lưu checkpoint: {ex}")
+
+            def _delete_checkpoint():
+                try:
+                    cp_path = os.path.join(get_checkpoints_dir(), f"{job.job_id}.json")
+                    if os.path.exists(cp_path):
+                        os.remove(cp_path)
+                except Exception:
+                    pass
 
             # === Step 1 ===
-            _log("INFO", 1, "=== Step 1: Tạo presigned URLs ===")
-            if check_cancelled():
-                raise InterruptedError()
-            context = step1_presigned_urls.execute(client, context)
-            if context is None:
-                raise Exception("Step 1 thất bại: Không tạo được presigned URLs")
+            if start_step <= 1:
+                _log("INFO", 1, "=== Step 1: Tạo presigned URLs ===")
+                if check_cancelled():
+                    raise InterruptedError()
+                context = step1_presigned_urls.execute(client, context)
+                if context is None:
+                    raise Exception("Step 1 thất bại: Không tạo được presigned URLs")
 
             # === Step 2 ===
-            _log("INFO", 2, f"=== Step 2: Upload {len(context.presigned_urls)} ảnh lên S3 ===")
-            if check_cancelled():
-                raise InterruptedError()
-            upload_ok = step2_upload_files.execute(client, context, check_cancelled)
-            if not upload_ok:
-                raise Exception("Step 2 thất bại: Upload ảnh lỗi")
-
-            # Memory cleanup after upload
-            gc.collect()
+            if start_step <= 2:
+                _log("INFO", 2, f"=== Step 2: Upload {len(context.presigned_urls)} ảnh lên S3 ===")
+                if check_cancelled():
+                    raise InterruptedError()
+                upload_ok = step2_upload_files.execute(client, context, check_cancelled)
+                if not upload_ok:
+                    raise Exception("Step 2 thất bại: Upload ảnh lỗi")
+                # Memory cleanup after upload
+                gc.collect()
 
             # === Step 3 ===
-            _log("INFO", 3, "=== Step 3: Finalize Upload ===")
-            if check_cancelled():
-                raise InterruptedError()
-            if not step3_finalize_upload.execute(client, context.unique_str):
-                raise Exception("Step 3 thất bại: Finalize upload lỗi")
+            if start_step <= 3:
+                _log("INFO", 3, "=== Step 3: Finalize Upload ===")
+                if check_cancelled():
+                    raise InterruptedError()
+                if not step3_finalize_upload.execute(client, context.unique_str):
+                    raise Exception("Step 3 thất bại: Finalize upload lỗi")
 
             # === Step 4 ===
-            _log("INFO", 4, "=== Step 4: Kích hoạt xử lý HDR ===")
-            if check_cancelled():
-                raise InterruptedError()
-            if not step4_associate_and_run.execute(
-                client=client,
-                unique_str=context.unique_str,
-                email=context.email,
-                firstname=context.firstname,
-                lastname=context.lastname,
-                address=context.address,
-                files_count=len(context.filenames),
-                indoor_model_id=indoor_model_id,
-            ):
-                raise Exception("Step 4 thất bại: Không kích hoạt được xử lý")
+            if start_step <= 4:
+                _log("INFO", 4, "=== Step 4: Kích hoạt xử lý HDR ===")
+                if check_cancelled():
+                    raise InterruptedError()
+                if not step4_associate_and_run.execute(
+                    client=client,
+                    unique_str=context.unique_str,
+                    email=context.email,
+                    firstname=context.firstname,
+                    lastname=context.lastname,
+                    address=context.address,
+                    files_count=len(context.filenames),
+                    indoor_model_id=indoor_model_id,
+                    outdoor_model_id=outdoor_model_id,
+                ):
+                    raise Exception("Step 4 thất bại: Không kích hoạt được xử lý")
+            
+            can_checkpoint = True
 
             # === Step 5 ===
             _log("INFO", 5, "=== Step 5: Chờ server xử lý ===")
@@ -296,6 +469,9 @@ class PipelineManager:
             job.downloaded_count = len(downloaded)
             job.status = "completed"
             _log("INFO", 0, f"=== Pipeline hoàn tất! Đã tải {len(downloaded)} ảnh ===")
+            
+            # Successful completion -> Delete checkpoint
+            _delete_checkpoint()
 
         except InterruptedError:
             job.status = "stopped"
@@ -304,6 +480,10 @@ class PipelineManager:
             job.status = "failed"
             job.error = str(e)
             _log("ERROR", 0, f"Pipeline lỗi: {e}")
+            
+            # Save checkpoint if failure occurred after Step 4
+            if can_checkpoint:
+                _save_checkpoint()
         finally:
             # === Resource Cleanup ===
             # Close HTTP session to release TCP connections
