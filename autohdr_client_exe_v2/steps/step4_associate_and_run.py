@@ -5,6 +5,7 @@ Sends user info and unique_str to AutoHDR API to trigger HDR processing.
 """
 
 import logging
+from typing import Optional
 from core.http_client import HttpClient
 from core.logger import log
 
@@ -19,6 +20,7 @@ def _build_payload(
     address: str,
     files_count: int,
     indoor_model_id: int = 3,
+    outdoor_model_id: Optional[int] = None,
 ) -> dict:
     """Build the request payload for associate-and-run."""
     return {
@@ -30,7 +32,7 @@ def _build_payload(
         "spoofId": None,
         "smartlook_url": None,
         "indoor_model_id": indoor_model_id,
-        "outdoor_model_id": None,
+        "outdoor_model_id": outdoor_model_id,
         "files_count": files_count,
         "grass_replacement": False,
         "perspective_correction": False,
@@ -49,6 +51,7 @@ def execute(
     address: str,
     files_count: int,
     indoor_model_id: int = 3,
+    outdoor_model_id: Optional[int] = None,
 ) -> bool:
     """
     Execute Step 4: Associate files with user and trigger processing.
@@ -58,7 +61,7 @@ def execute(
     step = 4
 
     payload = _build_payload(
-        unique_str, email, firstname, lastname, address, files_count, indoor_model_id
+        unique_str, email, firstname, lastname, address, files_count, indoor_model_id, outdoor_model_id
     )
 
     try:

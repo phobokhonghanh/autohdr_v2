@@ -177,7 +177,16 @@ class ScreenMain(ctk.CTkFrame):
         # --- Job List ---
         job_header = ctk.CTkFrame(left_panel, fg_color="transparent")
         job_header.grid(row=0, column=0, sticky="new", padx=8, pady=(8, 0))
-        ctk.CTkLabel(job_header, text="Danh sách Jobs", font=("Arial", 18, "bold")).pack(anchor="w")
+        ctk.CTkLabel(job_header, text="Danh sách Jobs", font=("Arial", 18, "bold")).pack(side="left", anchor="w")
+        
+        # Scan failed jobs button
+        self.btn_scan_failed = ctk.CTkButton(
+            job_header, text="Quét job lỗi", width=80, height=28,
+            command=self._scan_recoverable_jobs,
+            fg_color="#4B5563", hover_color="#374151",
+            font=("Arial", 12, "bold")
+        )
+        self.btn_scan_failed.pack(side="right", padx=5)
 
         self.job_list_frame = ctk.CTkScrollableFrame(left_panel, label_text="")
         self.job_list_frame.grid(row=0, column=0, sticky="nsew", padx=8, pady=(40, 5))
@@ -258,7 +267,7 @@ class ScreenMain(ctk.CTkFrame):
         self.mode_var = ctk.StringVar(value=cache.get("mode", "Lisa"))
         self.mode_selector = ctk.CTkSegmentedButton(
             mode_frame, 
-            values=["Classic", "Lisa"],
+            values=["Classic", "Lisa", "No Sky"],
             variable=self.mode_var,
             command=lambda v: cache.set("mode", v),
             height=30
@@ -610,9 +619,16 @@ class ScreenMain(ctk.CTkFrame):
         # Get proxy config
         proxy_config = self._get_proxy_config()
 
-        # Get indoor_model_id from mode selection
+        # Get model IDs from mode selection
         mode = self.mode_var.get()
-        indoor_model_id = 1 if mode == "Classic" else 3
+        indoor_model_id = 3
+        outdoor_model_id = None
+
+        if mode == "Classic":
+            indoor_model_id = 1
+        elif mode == "No Sky":
+            indoor_model_id = 4
+            outdoor_model_id = 4
 
         # Create job
         job = self.pipeline_mgr.create_job(
@@ -621,6 +637,7 @@ class ScreenMain(ctk.CTkFrame):
             address=address,
             download_dir=download_dir,
             indoor_model_id=indoor_model_id,
+            outdoor_model_id=outdoor_model_id,
             on_log=lambda jid, msg: self.after(0, lambda j=jid, m=msg: self._on_job_log(j, m)),
             on_job_update=lambda j: self.after(0, lambda: self._refresh_job_list()),
             proxy_config=proxy_config,
@@ -679,6 +696,15 @@ class ScreenMain(ctk.CTkFrame):
         )
         stop_btn.pack(side="right", padx=5, pady=3)
         job_row.stop_btn = stop_btn
+
+        # Restart button — only shown if checkpoint exists
+        restart_btn = ctk.CTkButton(
+            job_row, text="🔄", width=40, height=32,
+            command=lambda jid=job.job_id: self._resume_job(jid),
+            fg_color="#F59E0B", hover_color="#D97706",
+        )
+        # Initially hidden, shown by _refresh_job_list if checkpoint exists
+        job_row.restart_btn = restart_btn
 
         # Folder button — only shown when completed
         folder_btn = ctk.CTkButton(
@@ -744,9 +770,41 @@ class ScreenMain(ctk.CTkFrame):
             except Exception:
                 pass
 
+    def _resume_job(self, job_id: str):
+        """Resume a job from checkpoint."""
+        # Use existing callbacks
+        on_log = lambda jid, msg: self.after(0, lambda j=jid, m=msg: self._on_job_log(j, m))
+        on_job_update = lambda j: self.after(0, lambda: self._refresh_job_list())
+        
+        # Call resume
+        new_job = self.pipeline_mgr.resume_job(job_id, on_log, on_job_update)
+        if new_job:
+            self._select_job(job_id)
+            self._refresh_job_list()
+
     def _stop_job(self, job_id: str):
         """Stop a running job."""
         self.pipeline_mgr.stop_job(job_id)
+
+    def _scan_recoverable_jobs(self):
+        """Scan for checkpoints and add them to the UI list."""
+        new_jobs = self.pipeline_mgr.load_recoverable_jobs()
+        if not new_jobs:
+            return
+
+        for job in new_jobs:
+            self._add_job_to_list(job)
+            # Attach callbacks
+            self.pipeline_mgr.update_callbacks(
+                job.job_id,
+                on_log=lambda jid, msg: self.after(0, lambda j=jid, m=msg: self._on_job_log(j, m)),
+                on_job_update=lambda j: self.after(0, lambda: self._refresh_job_list()),
+            )
+        
+        self._refresh_job_list()
+        # Optionally select the first newly found job
+        if new_jobs:
+            self._select_job(new_jobs[0].job_id)
 
     def _refresh_job_list(self):
         """Refresh job status in the UI."""
@@ -796,6 +854,15 @@ class ScreenMain(ctk.CTkFrame):
                         widget.stop_btn.pack_forget()
                     if jid == self.selected_job_id:
                         self.log_title_label.configure(text=f"Log: Job {jid} ⏹")
+
+                # Check for checkpoints to show/hide restart button
+                checkpoint_ids = self.pipeline_mgr.get_available_checkpoint_ids()
+                if jid in checkpoint_ids and job.status != "processing":
+                    if hasattr(widget, 'restart_btn'):
+                        widget.restart_btn.pack(side="right", padx=5, pady=3)
+                else:
+                    if hasattr(widget, 'restart_btn'):
+                        widget.restart_btn.pack_forget()
             except Exception:
                 pass
 

@@ -81,19 +81,24 @@ def execute(
         # Fetch photoshoots
         _log("INFO", f"Đang kiểm tra trạng thái... (lần {attempt + 1}/{max_retries + 1})")
         data = _fetch_photoshoots(client, user_id, photoshoot_limit)
+        
+        status = None
+        photoshoot_id = None
+        match = None
+
         if data is None:
             _log("ERROR", "Không thể lấy danh sách photoshoots")
-            return None
+            status = "failure"
+        else:
+            photoshoots = data.get("photoshoots", [])
+            match = _find_matching_photoshoot(photoshoots, unique_str, address)
 
-        photoshoots = data.get("photoshoots", [])
-        match = _find_matching_photoshoot(photoshoots, unique_str, address)
-
-        if match is None:
-            _log("ERROR", f"Không tìm thấy photoshoot cho unique_str: {unique_str}")
-            return None
-
-        status = match.get("status", "")
-        photoshoot_id = match.get("id")
+            if match is None:
+                _log("ERROR", f"Không tìm thấy photoshoot cho unique_str: {unique_str}")
+                status = "failure"
+            else:
+                status = match.get("status", "")
+                photoshoot_id = match.get("id")
 
         if status == "success":
             _log("INFO", f"Xử lý hoàn tất! Photoshoot ID: {photoshoot_id}")
@@ -103,12 +108,13 @@ def execute(
             _log("ERROR", f"Photoshoot bị bỏ qua (ignore). Response: {match}")
             return None
 
-        elif status == "in_progress":
+        elif status in ["in_progress", "failure"]:
             if attempt < max_retries:
                 minutes_approx = delay / 60
+                msg_prefix = "Server đang xử lý" if status == "in_progress" else "Lỗi hệ thống/Không tìm thấy"
                 _log(
                     "INFO",
-                    f"Server đang xử lý... Retry {attempt + 1}/{max_retries}, "
+                    f"{msg_prefix}... Retry {attempt + 1}/{max_retries}, "
                     f"đợi {delay:.0f}s (~{minutes_approx:.1f} phút)"
                 )
                 # Sleep in small chunks to check cancellation
@@ -126,6 +132,6 @@ def execute(
                 return None
         else:
             _log("ERROR", f"Status không xác định: '{status}'. Response: {match}")
-            return None
+            return "failure"
 
     return None

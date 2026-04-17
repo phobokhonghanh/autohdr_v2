@@ -114,7 +114,7 @@ def setup_job_logger(job_id: str) -> logging.Logger:
     job_logger.setLevel(logging.DEBUG)
 
     log_path = get_job_log_path(job_id)
-    file_handler = logging.FileHandler(log_path, mode="w", encoding="utf-8")
+    file_handler = logging.FileHandler(log_path, mode="a", encoding="utf-8")
     file_handler.setFormatter(StepFormatter())
     file_handler.setLevel(logging.DEBUG)
     job_logger.addHandler(file_handler)
