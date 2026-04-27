@@ -61,11 +61,20 @@ def _download_single_file(
     url: str,
     output_path: str,
     max_retries: int = 3,
+    on_log: Optional[Callable] = None,
 ) -> bool:
     """Download a single file with streaming write and retry logic."""
     for attempt in range(max_retries):
         try:
-            response = client.get(url, stream=True)
+            # S3 presigned URLs often fail if you send extra cookies or site-specific headers.
+            # Setting a header to None in requests removes it from the session headers for this call.
+            s3_headers = {
+                "Cookie": None,
+                "Origin": None,
+                "Referer": None,
+                "Content-Type": None,
+            }
+            response = client.get(url, stream=True, headers=s3_headers)
             response.raise_for_status()
 
             # Write in chunks — never hold entire file in RAM
@@ -75,7 +84,13 @@ def _download_single_file(
                         f.write(chunk)
             return True
         except Exception as e:
-            log(logger, "WARNING", 7, f"Download retry {attempt + 1}/{max_retries}: {e}")
+            msg = f"Download retry {attempt + 1}/{max_retries}: {e}"
+            log(logger, "WARNING", 7, msg)
+            if on_log:
+                try:
+                    on_log("WARNING", 7, msg)
+                except Exception:
+                    pass
             # Clean up partial file on failure
             if os.path.exists(output_path):
                 try:
@@ -93,6 +108,7 @@ def execute(
     download_dir: str,
     check_cancelled: Optional[Callable] = None,
     folder_name: Optional[str] = None,
+    on_log: Optional[Callable] = None,
 ) -> List[str]:
     """
     Execute Step 7: Download processed photos (concurrent + checkpoint).
@@ -102,8 +118,17 @@ def execute(
     step = 7
     downloaded_paths = []
 
+    def _log(level: str, msg: str):
+        """Log through both the module logger and the pipeline callback."""
+        log(logger, level, step, msg)
+        if on_log:
+            try:
+                on_log(level, step, msg)
+            except Exception:
+                pass
+
     if not cleaned_urls:
-        log(logger, "INFO", step, "Không có ảnh để tải")
+        _log("INFO", "Không có ảnh để tải")
         return []
 
     # Create output directory
@@ -113,12 +138,12 @@ def execute(
     os.makedirs(output_dir, exist_ok=True)
 
     file_count = len(cleaned_urls)
-    log(logger, "INFO", step, f"Tải {file_count} ảnh ({MAX_DOWNLOAD_WORKERS} workers) → {output_dir}")
+    _log("INFO", f"Thư mục lưu trữ: {output_dir}")
 
     # Load checkpoint — skip already-downloaded files
     completed_set = _load_checkpoint(output_dir)
     if completed_set:
-        log(logger, "INFO", step, f"Checkpoint: bỏ qua {len(completed_set)} ảnh đã tải trước đó")
+        _log("INFO", f"Checkpoint: bỏ qua {len(completed_set)} ảnh đã tải trước đó")
 
     # Build download tasks
     tasks = []
@@ -138,10 +163,8 @@ def execute(
         tasks.append((url, output_path, filename))
 
     if not tasks:
-        log(logger, "INFO", step, f"Tất cả {file_count} ảnh đã được tải trước đó (checkpoint)")
+        _log("INFO", f"Tất cả {file_count} ảnh đã được tải trước đó (checkpoint)")
         return downloaded_paths
-
-    log(logger, "INFO", step, f"Cần tải: {len(tasks)} ảnh (bỏ qua {file_count - len(tasks)} từ checkpoint)")
 
     # Determine log frequency
     log_every = 10 if len(tasks) >= 50 else 1
@@ -165,6 +188,7 @@ def execute(
             future = executor.submit(
                 _download_single_file,
                 client, url, output_path,
+                3, on_log
             )
             future_to_info[future] = (output_path, filename)
 
@@ -179,7 +203,7 @@ def execute(
             try:
                 success = future.result()
             except Exception as e:
-                log(logger, "ERROR", step, f"Download crash {filename}: {e}")
+                _log("ERROR", f"Download crash {filename}: {e}")
                 success = False
 
             if success:
@@ -190,12 +214,17 @@ def execute(
                 _save_checkpoint(output_dir, completed_set)
                 # Log progress
                 if completed_count % log_every == 0 or completed_count == len(tasks):
-                    log(logger, "INFO", step, f"Tải OK: {completed_count}/{len(tasks)}")
+                    _log("INFO", f"Tải OK: {completed_count}/{len(tasks)}")
             else:
                 failed_count += 1
-                log(logger, "ERROR", step, f"Tải thất bại: {filename}")
+                _log("ERROR", f"Tải thất bại: {filename}")
 
-    log(logger, "INFO", step,
+    _log("INFO",
         f"Hoàn tất: {len(downloaded_paths)}/{file_count} ảnh "
         f"({failed_count} lỗi)")
+
+    # Kiểm tra xem đã tải đủ số lượng URL đầu vào chưa
+    if len(downloaded_paths) < file_count:
+        raise Exception(f"Tải thiếu ảnh: {len(downloaded_paths)}/{file_count}. Hãy thử tải lại.")
+
     return downloaded_paths

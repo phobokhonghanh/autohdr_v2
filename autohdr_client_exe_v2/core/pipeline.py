@@ -445,6 +445,7 @@ class PipelineManager:
                 photoshoot_id=context.photoshoot_id,
                 unique_str=context.unique_str,
                 input_filenames=context.filenames,
+                on_log=_log,
             )
             if not context.processed_urls:
                 raise Exception("Step 6 thất bại: Không tìm thấy ảnh đã xử lý")
@@ -458,6 +459,7 @@ class PipelineManager:
                 download_dir=download_dir,
                 check_cancelled=check_cancelled,
                 folder_name=job.job_id,
+                on_log=_log,
             )
 
             # Memory cleanup after download
