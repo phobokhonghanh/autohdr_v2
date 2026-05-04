@@ -6,7 +6,7 @@ cleans URLs by removing query parameters.
 """
 
 import logging
-from typing import List
+from typing import List, Optional, Callable
 from urllib.parse import urlparse, urlunparse
 
 from core.http_client import HttpClient
@@ -28,6 +28,7 @@ def execute(
     unique_str: str,
     input_filenames: List[str],
     page_size: int = 10,
+    on_log: Optional[Callable] = None,
 ) -> List[str]:
     """
     Execute Step 6: Get processed photo URLs.
@@ -35,6 +36,15 @@ def execute(
     Returns list of cleaned processed photo URLs.
     """
     step = 6
+    
+    def _log(level: str, msg: str):
+        """Log through both the module logger and the pipeline callback."""
+        log(logger, level, step, msg)
+        if on_log:
+            try:
+                on_log(level, step, msg)
+            except Exception:
+                pass
 
     url = f"/api/proxy/photoshoots/{photoshoot_id}/processed_photos?page=1&page_size={page_size}"
 
@@ -43,20 +53,20 @@ def execute(
         response.raise_for_status()
         data = response.json()
     except Exception as e:
-        log(logger, "ERROR", step, f"Lỗi lấy processed photos: {e}")
+        _log("ERROR", f"Lỗi lấy processed photos: {e}")
         return []
 
     if not isinstance(data, list):
-        log(logger, "ERROR", step, f"Response format không đúng: {type(data)}")
+        _log("ERROR", f"Response format không đúng: {type(data)}")
         return []
 
     if len(data) == 0:
-        log(logger, "ERROR", step, "Không có processed photos")
+        _log("ERROR", f"Không có processed photos")
         return []
 
     # Extract and clean URLs
     raw_urls = [item.get("url", "") for item in data if item.get("url")]
-    cleaned_urls = [_clean_url(u) for u in raw_urls]
+    # cleaned_urls = [_clean_url(u) for u in raw_urls]
 
-    log(logger, "INFO", step, f"Tìm thấy {len(cleaned_urls)} ảnh đã xử lý")
-    return cleaned_urls
+    _log("INFO", f"Tìm thấy {len(raw_urls)} ảnh đã xử lý")
+    return raw_urls
