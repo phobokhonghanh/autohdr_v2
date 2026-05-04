@@ -59,6 +59,13 @@ class Settings:
     retry_backoff_factor: float = 1.5
     photoshoot_limit: int = 20
     photoshoot_page_size: int = 10
+    
+    # S3 Settings
+    s3_region: Optional[str] = None
+    s3_endpoint: Optional[str] = None
+    s3_access_key: Optional[str] = None
+    s3_secret_key: Optional[str] = None
+    s3_bucket: Optional[str] = None
 
     @classmethod
     def from_env(cls, env_path: Optional[str] = None) -> "Settings":
@@ -89,6 +96,11 @@ class Settings:
             retry_backoff_factor=float(os.getenv("AUTOHDR_RETRY_BACKOFF_FACTOR", "1.5")),
             photoshoot_limit=int(os.getenv("AUTOHDR_PHOTOSHOOT_LIMIT", "20")),
             photoshoot_page_size=int(os.getenv("AUTOHDR_PHOTOSHOOT_PAGE_SIZE", "10")),
+            s3_region=os.getenv("S3_REGION"),
+            s3_endpoint=os.getenv("S3_ENDPOINT"),
+            s3_access_key=os.getenv("S3_ACCESS_KEY"),
+            s3_secret_key=os.getenv("S3_SECRET_KEY"),
+            s3_bucket=os.getenv("S3_BUCKET_NAME"),
         )
 
     @property

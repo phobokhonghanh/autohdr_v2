@@ -7,25 +7,54 @@ import os
 import logging
 from typing import List, Optional
 from models.schemas import KeyRecord
+from config.settings import Settings
+from core.s3_storage import S3Storage
 
 logger = logging.getLogger(__name__)
 
+# Initialize S3 Storage
+settings = Settings.from_env()
+s3_storage = S3Storage(settings)
+
 def load_keys(keys_file: str) -> List[KeyRecord]:
-    """Load the key records from the JSON file."""
-    if not os.path.exists(keys_file):
-        return []
+    """Load the key records from S3."""
+    key = os.path.basename(keys_file)
     try:
-        with open(keys_file, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            return [KeyRecord.from_dict(item) for item in data]
-    except (json.JSONDecodeError, IOError):
-        return []
+        content = s3_storage.get_object(key)
+        
+        # Distinguish between "File not found" and "S3 Error"
+        if content is None:
+            # If s3_storage.get_object returns None, it means:
+            # 1. NoSuchKey (handled by returning None in s3_storage)
+            # 2. OR All retries failed (auth error, network error, etc.)
+            
+            # We can't easily tell here without more info from s3_storage,
+            # but let's assume if it's None, we should at least check if we can continue.
+            logger.warning(f"Could not retrieve S3 key: {key}. It might not exist or there's an error.")
+            return []
+        
+        logger.info(f"Successfully loaded content for S3 key: {key} (length: {len(content)})")
+        data = json.loads(content)
+        records = [KeyRecord.from_dict(item) for item in data]
+        logger.info(f"Parsed {len(records)} records from S3 key: {key}")
+        return records
+    except Exception as e:
+        logger.error(f"Critical failure loading keys from S3 ({key}): {e}", exc_info=True)
+        # Instead of returning [], we should probably raise here to prevent data loss
+        # during a subsequent save_keys call.
+        raise
 
 def save_keys(keys_file: str, records: List[KeyRecord]) -> None:
-    """Save key records to the JSON file."""
-    os.makedirs(os.path.dirname(keys_file) if os.path.dirname(keys_file) else ".", exist_ok=True)
-    with open(keys_file, "w", encoding="utf-8") as f:
-        json.dump([record.to_dict() for record in records], f, ensure_ascii=False, indent=2)
+    """Save key records to S3."""
+    key = os.path.basename(keys_file)
+    try:
+        content = json.dumps([record.to_dict() for record in records], ensure_ascii=False, indent=2)
+        success = s3_storage.put_object(key, content)
+        if not success:
+            raise IOError(f"Failed to save keys to S3 after retries.")
+    except Exception as e:
+        logger.error(f"Failed to save keys to S3 ({key}): {e}")
+        raise # We raise here to let the caller know it failed
 
 import random
 import string
