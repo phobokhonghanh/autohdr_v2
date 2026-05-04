@@ -204,6 +204,10 @@ async def admin_import_keys(password: str = Form(...), file: UploadFile = File(.
         raise HTTPException(status_code=400, detail="Invalid JSON format")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Import failed: {str(e)}")
+        
+@app.get("/kaithhealthcheck")
+async def health_check():
+    return {"status": "ok"}
 
 @app.post("/api/admin/keys/export")
 async def admin_export_keys(req: AdminKeyExportRequest):
