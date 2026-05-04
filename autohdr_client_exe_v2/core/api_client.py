@@ -20,7 +20,7 @@ class ApiClient:
 
     def __init__(self, base_url: Optional[str] = None):
         if not base_url:
-            base_url = os.getenv("AUTOHDR_API_BASE", "https://autohdr-backend.up.railway.app")
+            base_url = os.getenv("AUTOHDR_API_BASE", "https://autohdr-backend.leapcell.app")
         self.base_url = base_url.rstrip("/")
 
     def check_key(self, key: str, machine_id: Optional[str] = None) -> bool:
