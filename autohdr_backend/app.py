@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 import zipfile
 from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, JSONResponse, FileResponse
+from fastapi.responses import StreamingResponse, JSONResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -37,6 +37,7 @@ from steps import (
     step7_download_photos,
     step8_zip_files,
 )
+from core.key_manager import s3_storage
 
 app = FastAPI(title="AutoHDR API Service")
 logger = get_logger("autohdr_api")
@@ -211,13 +212,19 @@ async def admin_export_keys(req: AdminKeyExportRequest):
     if req.password != settings.proxy_pass:
         raise HTTPException(status_code=401, detail="Unauthorized: Invalid admin password")
         
-    if not os.path.exists(settings.keys_file):
-        raise HTTPException(status_code=404, detail="Keys file not found")
+    # Lấy key name từ path file hệ thống
+    s3_key = os.path.basename(settings.keys_file)
+    content = s3_storage.get_object(s3_key)
+    
+    if not content:
+        raise HTTPException(status_code=404, detail="Keys data not found on S3")
         
-    return FileResponse(
-        path=settings.keys_file,
+    return Response(
+        content=content,
         media_type="application/json",
-        filename="keys_export.json"
+        headers={
+            "Content-Disposition": f"attachment; filename=keys_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        }
     )
 
 def run_pipeline_task(job_id: str, file_paths: List[str], address: str, settings: Settings, cookie: Optional[str], email: Optional[str], indoor_model_id: int = 3, key: Optional[str] = None):
